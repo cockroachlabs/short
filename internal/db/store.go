@@ -36,8 +36,7 @@ CREATE TABLE IF NOT EXISTS links (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   url        STRING      NOT NULL,
   PRIMARY KEY (short),
-  INDEX (author, short),
-  UNIQUE INDEX (author, url) -- Prevent a user from creating duplicates
+  UNIQUE INDEX (author, short, url) -- Use INSERT ON CONFLICT for updates
 )`, `
 CREATE TABLE IF NOT EXISTS clicks (
   short      STRING      NOT NULL REFERENCES links(short) ON DELETE CASCADE,
@@ -108,7 +107,7 @@ ORDER BY updated_at DESC
 	if s.publish, err = db.PrepareContext(ctx, `
 INSERT INTO links (author, created_at, pub, short, updated_at, url)
 VALUES ($1, now(), $2, $3, now(), $4)
-ON CONFLICT (author, url) DO UPDATE
+ON CONFLICT (author, short, url) DO UPDATE
 SET pub = excluded.pub, updated_at = now()
 RETURNING author, created_at, pub, short, updated_at, url
 `); err != nil {

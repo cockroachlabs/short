@@ -68,7 +68,7 @@ func TestDB(t *testing.T) {
 		a.Equal(l1, found)
 	})
 
-	t.Run("check no duplicates", func(t *testing.T) {
+	t.Run("check updating", func(t *testing.T) {
 		a := assert.New(t)
 
 		l2, err := s.Publish(ctx, &Link{
@@ -88,6 +88,33 @@ func TestDB(t *testing.T) {
 		case err := <-errs:
 			a.NoError(err)
 		}
+
+		count, _, err := s.Served(ctx)
+		a.Equal(1, count)
+		a.NoError(err)
+	})
+
+	t.Run("check short aliases", func(t *testing.T) {
+		a := assert.New(t)
+
+		created, err := s.Publish(ctx, &Link{
+			Author: "test",
+			Short:  "foobar-alias",
+			URL:    "https://example.com/foobar",
+		})
+		a.NoError(err)
+		a.Equal(created.CreatedAt, created.UpdatedAt)
+
+		original, err := s.Get(ctx, "foobar")
+		a.NoError(err)
+		a.NotNil(original)
+
+		found, err := s.Get(ctx, "foobar-alias")
+		a.NoError(err)
+		a.NotNil(found)
+
+		a.Equal(created, found)
+		a.NotEqual(created, original)
 	})
 
 	t.Run("check no duplicates across users", func(t *testing.T) {
@@ -117,7 +144,7 @@ func TestDB(t *testing.T) {
 		a := assert.New(t)
 
 		links, clicks, err := s.Served(ctx)
-		a.Equal(1, links)
+		a.Equal(2, links)
 		a.Equal(2, clicks)
 		a.NoError(err)
 	})
