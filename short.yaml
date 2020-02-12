@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: short
+  name: short
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: short
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: short
+    spec:
+      containers:
+        - image: gcr.io/cockroach-dev-inf/cockroachlabs/short:f9d59d5-bob
+          imagePullPolicy: Always
+          name: short
+          command:
+            - short
+            - -b
+            - 0.0.0.0:8443
+            - -c
+            - $(connstring)
+          env:
+            - name: connstring
+              valueFrom:
+                secretKeyRef:
+                  key: connstring
+                  name: short-secrets
+          ports:
+            - containerPort: 8443
+              protocol: TCP
+              name: https
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /healthz?ready=1
+              port: https
+              scheme: HTTPS
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          volumeMounts:
+            - mountPath: "/secrets"
+              name: secrets
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: secrets
+          secret:
+            secretName: short-secrets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    beta.cloud.google.com/backend-config: '{"default":"crdb-dev-iap-config"}'
+    cloud.google.com/app-protocols: '{"https":"HTTP2"}'
+  labels:
+    app: short
+  name: short
+spec:
+  externalTrafficPolicy: Cluster
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+  selector:
+    app: short
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    cloud.google.com/app-protocols: '{"https":"HTTP2"}'
+  labels:
+    app: short
+  name: short-public
+spec:
+  externalTrafficPolicy: Cluster
+  ports:
+    - name: https
+      port: 443
+      protocol: TCP
+      targetPort: https
+  selector:
+    app: short
+  type: NodePort
