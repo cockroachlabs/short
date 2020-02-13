@@ -16,6 +16,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -97,7 +98,7 @@ func (s *Server) Run(ctx context.Context) error {
 		},
 	}
 
-	bytes, err := x509.CreateCertificate(rand.Reader, &cert, &cert, &priv.PublicKey, priv)
+	certBytes, err := x509.CreateCertificate(rand.Reader, &cert, &cert, &priv.PublicKey, priv)
 	if err != nil {
 		return errors.Wrap(err, "failed to generate certificate")
 	}
@@ -114,7 +115,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler: mux,
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{{
-				Certificate: [][]byte{bytes},
+				Certificate: [][]byte{certBytes},
 				PrivateKey:  priv,
 			}},
 		},
@@ -145,11 +146,9 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 	}
 	path := r.URL.Path[9:]
 	if asset, ok := assets.Assets[path]; ok {
-		w.Header().Set(contentType, asset.ContentType)
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write(asset.Data); err != nil {
-			log.Printf("failed to write asset %s: %v", asset, err)
-		}
+		// Use pre-computed content type.
+		r.Header.Set(contentType, asset.ContentType)
+		http.ServeContent(w, r, path, asset.MTime, bytes.NewReader(asset.Data))
 	} else {
 		writeStatus(w, http.StatusNotFound)
 	}

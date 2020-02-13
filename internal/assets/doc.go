@@ -15,4 +15,4 @@
 // Package assets incorporates the given static assets into the compiled code.
 package assets
 
-//go:generate go run github.com/cockroachlabs/short/cmd/slurp -i .svg -i .html
+//go:generate go run github.com/cockroachlabs/short/cmd/slurp -i .png -i .svg -i .html
