@@ -47,6 +47,7 @@ type Server struct {
 	conn      string
 	fallback  string
 	forceUser string
+	httpOnly  bool
 	store     *db.Store
 }
 
@@ -55,6 +56,7 @@ func New(flags *pflag.FlagSet) *Server {
 	s := &Server{}
 	flags.StringVarP(&s.bind, "bind", "b", ":443", "the address to bind to")
 	flags.StringVarP(&s.conn, "conn", "c", "", "the database connection string")
+	flags.BoolVar(&s.httpOnly, "httpOnly", false, "bind HTTP instead of HTTPS")
 	flags.StringVar(&s.fallback, "fallback", "https://cockroachlabs.com", "the URL to send if not found")
 	flags.StringVar(&s.forceUser, "forceUser", "", "for debugging use only")
 	return s
@@ -71,38 +73,6 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Loosely based on https://golang.org/src/crypto/tls/generate_cert.go
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return errors.Wrap(err, "failed to generate private key")
-	}
-
-	now := time.Now().UTC()
-
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return errors.Wrap(err, "failed to generate serial number")
-	}
-
-	cert := x509.Certificate{
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		NotBefore:             now,
-		NotAfter:              now.AddDate(1, 0, 0),
-		SerialNumber:          serialNumber,
-		Subject: pkix.Name{
-			Organization: []string{"Cockroach Labs"},
-		},
-	}
-
-	certBytes, err := x509.CreateCertificate(rand.Reader, &cert, &cert, &priv.PublicKey, priv)
-	if err != nil {
-		return errors.Wrap(err, "failed to generate certificate")
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_/asset/", s.asset)
 	mux.HandleFunc("/_/v1/publish", s.publish)
@@ -113,12 +83,50 @@ func (s *Server) Run(ctx context.Context) error {
 	server := http.Server{
 		Addr:    s.bind,
 		Handler: mux,
-		TLSConfig: &tls.Config{
+	}
+	listen := server.ListenAndServe
+
+	if !s.httpOnly {
+		// Loosely based on https://golang.org/src/crypto/tls/generate_cert.go
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return errors.Wrap(err, "failed to generate private key")
+		}
+
+		now := time.Now().UTC()
+
+		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+		if err != nil {
+			return errors.Wrap(err, "failed to generate serial number")
+		}
+
+		cert := x509.Certificate{
+			BasicConstraintsValid: true,
+			DNSNames:              []string{"localhost"},
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+			NotBefore:             now,
+			NotAfter:              now.AddDate(1, 0, 0),
+			SerialNumber:          serialNumber,
+			Subject: pkix.Name{
+				Organization: []string{"Cockroach Labs"},
+			},
+		}
+
+		certBytes, err := x509.CreateCertificate(rand.Reader, &cert, &cert, &priv.PublicKey, priv)
+		if err != nil {
+			return errors.Wrap(err, "failed to generate certificate")
+		}
+
+		server.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{{
 				Certificate: [][]byte{certBytes},
 				PrivateKey:  priv,
-			}},
-		},
+			}}}
+		listen = func() error {
+			return server.ListenAndServeTLS("" /* certfile */, "" /* keyfile */)
+		}
 	}
 
 	go func() {
@@ -131,7 +139,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	log.Printf("listening on %s", server.Addr)
 
-	if err := server.ListenAndServeTLS("" /* certfile */, "" /* keyfile */); err != nil && err != http.ErrServerClosed {
+	if err := listen(); err != nil && err != http.ErrServerClosed {
 		return errors.Wrap(err, "failed to start server")
 	}
 
