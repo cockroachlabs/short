@@ -51,6 +51,11 @@ func TestDB(t *testing.T) {
 	}
 	assert.NotNil(t, s)
 
+	ctx, tx, err := s.WithTransaction(ctx)
+	if !assert.NoError(t, err) {
+		return
+	}
+
 	t.Run("create link", func(t *testing.T) {
 		a := assert.New(t)
 		l1, err := s.Publish(ctx, &Link{
@@ -79,7 +84,6 @@ func TestDB(t *testing.T) {
 		})
 		a.NoError(err)
 		a.True(l2.Public)
-		a.NotEqual(l2.CreatedAt, l2.UpdatedAt)
 
 		links, errs := s.List(ctx, "test")
 		select {
@@ -117,19 +121,6 @@ func TestDB(t *testing.T) {
 		a.NotEqual(created, original)
 	})
 
-	t.Run("check no duplicates across users", func(t *testing.T) {
-		a := assert.New(t)
-
-		l3, err := s.Publish(ctx, &Link{
-			Author: "other",
-			Public: true,
-			Short:  "foobar",
-			URL:    "https://example.com/foobar",
-		})
-		a.Equal(ErrShortConflict, err)
-		a.Nil(l3)
-	})
-
 	t.Run("count clicks", func(t *testing.T) {
 		a := assert.New(t)
 
@@ -148,4 +139,45 @@ func TestDB(t *testing.T) {
 		a.Equal(2, clicks)
 		a.NoError(err)
 	})
+
+	t.Run("delete", func(t *testing.T) {
+		a := assert.New(t)
+
+		a.NoError(s.Delete(ctx, "foobar"))
+
+		links, clicks, err := s.Served(ctx)
+		a.Equal(1, links)
+		a.Equal(0, clicks)
+		a.NoError(err)
+	})
+
+	assert.NoError(t, tx.Commit())
+}
+
+func TestNoDuplicates(t *testing.T) {
+	a := assert.New(t)
+	ctx := context.Background()
+
+	s, err := New(ctx, conn)
+	if !a.NoError(err) {
+		return
+	}
+	a.NotNil(s)
+
+	_, err = s.Publish(context.Background(), &Link{
+		Author: "one",
+		Public: true,
+		Short:  "foobar",
+		URL:    "https://example.com/foobar",
+	})
+	a.NoError(err)
+
+	l3, err := s.Publish(context.Background(), &Link{
+		Author: "other",
+		Public: true,
+		Short:  "foobar",
+		URL:    "https://example.com/foobar",
+	})
+	a.Equal(ErrShortConflict, err)
+	a.Nil(l3)
 }

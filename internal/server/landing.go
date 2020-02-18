@@ -15,11 +15,12 @@
 package server
 
 import (
+	"context"
 	"html/template"
-	"log"
 	"net/http"
 
 	"github.com/cockroachlabs/short/internal/assets"
+	"github.com/cockroachlabs/short/internal/server/response"
 )
 
 var landing *template.Template
@@ -32,17 +33,12 @@ func init() {
 	}
 }
 
-func (s *Server) landingPage(w http.ResponseWriter, req *http.Request) {
-	auth, ok := s.checkAuth(w, req)
-	if !ok {
-		return
-	}
-
-	links, _ := s.store.List(req.Context(), auth)
-	totalLinks, totalClicks, err := s.store.Served(req.Context())
+func (s *Server) landingPage(ctx context.Context) *response.Response {
+	auth := authFrom(ctx)
+	links, _ := s.store.List(ctx, auth)
+	totalLinks, totalClicks, err := s.store.Served(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return response.Error(http.StatusInternalServerError, err)
 	}
 
 	data := map[string]interface{}{
@@ -52,9 +48,8 @@ func (s *Server) landingPage(w http.ResponseWriter, req *http.Request) {
 		"User":        auth,
 	}
 
-	w.Header().Set(contentType, "text/html; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-	if err := landing.Execute(w, data); err != nil {
-		log.Printf("%v", err)
-	}
+	return response.Func(func(w http.ResponseWriter) error {
+		w.Header().Set(contentType, "text/html; charset=UTF-8")
+		return landing.Execute(w, data)
+	})
 }

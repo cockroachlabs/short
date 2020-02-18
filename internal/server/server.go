@@ -34,11 +34,19 @@ import (
 	"strings"
 	"time"
 
+	"path"
+
 	"github.com/cockroachlabs/short/internal/assets"
 	"github.com/cockroachlabs/short/internal/db"
 	"github.com/cockroachlabs/short/internal/hash"
+	"github.com/cockroachlabs/short/internal/server/response"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
+)
+
+const (
+	applicationJSON = "application/json"
+	contentType     = "Content-Type"
 )
 
 // Server handles the HTTP API and the UI.
@@ -74,11 +82,12 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/_/asset/", s.asset)
-	mux.HandleFunc("/_/v1/publish", s.publish)
-	mux.HandleFunc("/healthz", s.healthz)
-	mux.HandleFunc("/p/", s.public)
-	mux.HandleFunc("/", s.root)
+	mux.HandleFunc("/_/asset/", s.handler(authRequired, s.asset))
+	mux.HandleFunc("/_/healthz", s.handler(authPublic, s.healthz))
+	mux.HandleFunc("/_/v1/link/", s.handler(authRequired, s.crud))
+	mux.HandleFunc("/_/v1/publish", s.handler(authRequired, s.publish))
+	mux.HandleFunc("/p/", s.handler(authPublic, s.public))
+	mux.HandleFunc("/", s.handler(authRequired, s.root))
 
 	server := http.Server{
 		Addr:    s.bind,
@@ -147,30 +156,20 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 // asset serves static asset data (images, js, etc.)
-func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
+func (s *Server) asset(r *http.Request) *response.Response {
 	if r.Method != http.MethodGet {
-		writeStatus(w, http.StatusMethodNotAllowed)
-		return
+		return response.Status(http.StatusMethodNotAllowed)
 	}
-	path := r.URL.Path[9:]
-	if asset, ok := assets.Assets[path]; ok {
-		// Use pre-computed content type.
-		r.Header.Set(contentType, asset.ContentType)
-		http.ServeContent(w, r, path, asset.MTime, bytes.NewReader(asset.Data))
-	} else {
-		writeStatus(w, http.StatusNotFound)
+	p := r.URL.Path[9:]
+	if asset, ok := assets.Assets[p]; ok {
+		return response.Func(func(w http.ResponseWriter) error {
+			// Use pre-computed content type.
+			w.Header().Set(contentType, asset.ContentType)
+			http.ServeContent(w, r, p, asset.MTime, bytes.NewReader(asset.Data))
+			return nil
+		})
 	}
-}
-
-// checkAuth ensures that the given request has IAP JWT data. Note that
-// this function does not actually validate the token, we assume
-// that the only direct access to this service is via IAP.
-func (s *Server) checkAuth(w http.ResponseWriter, r *http.Request) (string, bool) {
-	if email, ok := s.extractEmail(r); ok {
-		return email, true
-	}
-	writeStatus(w, http.StatusForbidden)
-	return "", false
+	return response.Status(http.StatusNotFound)
 }
 
 // extractEmail looks for the IAP JWT data.
@@ -205,70 +204,78 @@ func (s *Server) extractEmail(r *http.Request) (string, bool) {
 	return token.Email, true
 }
 
-func (s *Server) healthz(w http.ResponseWriter, req *http.Request) {
-	if req.URL.Query().Get("ready") != "" {
-		if err := s.store.Ping(req.Context()); err != nil {
-			log.Printf("failed health check: %v", err)
-			writeStatus(w, http.StatusInternalServerError)
-			return
+func (s *Server) crud(req *http.Request) *response.Response {
+	// Expecting the next element of the path to be a short link id
+	dir, short := path.Split(req.URL.Path)
+	if dir != "/_/v1/link/" {
+		return response.Status(http.StatusNotFound)
+	}
+
+	switch req.Method {
+	case http.MethodDelete:
+		return s.crudDelete(req, short)
+	case http.MethodGet:
+		return s.crudGet(req, short)
+	case http.MethodPost:
+		return s.crudPost(req)
+	default:
+		return response.Status(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) crudDelete(req *http.Request, short string) *response.Response {
+	author := authFrom(req.Context())
+	ctx, tx, err := s.store.WithTransaction(req.Context())
+	defer func() {
+		if err != nil {
+			tx.Rollback()
 		}
-	}
+	}()
 
-	writeStatus(w, http.StatusOK)
-}
-
-// public serves only public links at the /p/ prefix.
-func (s *Server) public(w http.ResponseWriter, req *http.Request) {
-	l, err := s.store.Get(req.Context(), req.URL.Path[3:])
+	link, err := s.store.Get(ctx, short)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errors.Wrap(err, "get"))
-		return
+		return response.Error(http.StatusInternalServerError, err)
 	}
-
-	if l == nil || !l.Public {
-		l = &db.Link{URL: s.fallback}
-	} else {
-		// Don't hold up caller for our metrics.
-		go func() {
-			if err := s.store.Click(context.Background(), l.Short); err != nil {
-				log.Printf("dropped click for %s: %v", l.Short, err)
-			}
-		}()
+	if link == nil {
+		return response.Status(http.StatusNotFound)
 	}
-
-	writeRedirect(w, http.StatusTemporaryRedirect, l.URL)
+	if link.Author != author {
+		return response.Status(http.StatusForbidden)
+	}
+	if err := s.store.Delete(ctx, short); err != nil {
+		return response.Error(http.StatusInternalServerError, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return response.Error(http.StatusInternalServerError, err)
+	}
+	return response.JSON(http.StatusOK, link)
 }
 
-func (s *Server) publish(w http.ResponseWriter, req *http.Request) {
-	auth, ok := s.checkAuth(w, req)
-	if !ok {
-		return
+func (s *Server) crudGet(req *http.Request, short string) *response.Response {
+	link, err := s.store.Get(req.Context(), short)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, err)
 	}
-	if req.Method != "POST" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	if link == nil {
+		return response.Status(http.StatusNotFound)
 	}
+	return response.JSON(http.StatusOK, link)
+}
+
+func (s *Server) crudPost(req *http.Request) *response.Response {
+	auth := authFrom(req.Context())
 
 	var payload struct {
 		Public bool
 		Short  string
 		URL    string
 	}
-	redirect := false
 
-	if req.Header.Get(contentType) == "application/json" {
-		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-			writeError(w, http.StatusBadRequest, errors.Wrap(err, "unable to decode payload"))
-			return
-		}
-	} else {
-		if err := req.ParseForm(); err != nil {
-			writeError(w, http.StatusBadRequest, errors.Wrap(err, "unable to decode form"))
-			return
-		}
-		payload.Public = req.PostForm.Get("Public") == "true"
-		payload.Short = req.PostForm.Get("Short")
-		payload.URL = req.PostForm.Get("URL")
-		redirect = true
+	if req.Header.Get(contentType) != applicationJSON {
+		return response.Text(http.StatusBadRequest, "expecting "+applicationJSON)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		return response.Error(http.StatusBadRequest, errors.Wrap(err, "unable to decode payload"))
 	}
 
 	if payload.Short == "" {
@@ -282,34 +289,96 @@ func (s *Server) publish(w http.ResponseWriter, req *http.Request) {
 		Short:  payload.Short,
 		URL:    payload.URL,
 	}); err == nil {
-		if redirect {
-			writeRedirect(w, http.StatusFound, "/")
-		} else {
-			writeJSON(w, http.StatusOK, l)
-		}
-	} else if _, ok := err.(db.ValidationError); ok {
-		writeError(w, http.StatusBadRequest, err)
-	} else if err == db.ErrShortConflict {
-		writeError(w, http.StatusBadRequest, err)
+		return response.JSON(http.StatusCreated, l)
+	} else if test := db.ValidationError(""); errors.As(err, &test) {
+		return response.Error(http.StatusBadRequest, test)
+	} else if test := db.ErrShortConflict; errors.As(err, &test) {
+		return response.Error(http.StatusBadRequest, test)
 	} else {
-		writeError(w, http.StatusInternalServerError, errors.Wrap(err, "unable to store data"))
+		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "unable to store data"))
 	}
 }
 
-func (s *Server) root(w http.ResponseWriter, req *http.Request) {
-	if _, ok := s.checkAuth(w, req); !ok {
-		return
+func (s *Server) healthz(req *http.Request) *response.Response {
+	if req.URL.Query().Get("ready") != "" {
+		if err := s.store.Ping(req.Context()); err != nil {
+			log.Printf("failed health check: %v", err)
+			return response.Status(http.StatusInternalServerError)
+		}
 	}
 
+	return response.Status(http.StatusOK)
+}
+
+// public serves only public links at the /p/ prefix.
+func (s *Server) public(req *http.Request) *response.Response {
+	l, err := s.store.Get(req.Context(), req.URL.Path[3:])
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "get"))
+	}
+
+	if l == nil || !l.Public {
+		l = &db.Link{URL: s.fallback}
+	} else {
+		// Don't hold up caller for our metrics.
+		go func() {
+			if err := s.store.Click(context.Background(), l.Short); err != nil {
+				log.Printf("dropped click for %s: %v", l.Short, err)
+			}
+		}()
+	}
+
+	return response.Redirect(http.StatusTemporaryRedirect, l.URL)
+}
+
+func (s *Server) publish(req *http.Request) *response.Response {
+	auth := authFrom(req.Context())
+	if req.Method != "POST" {
+		return response.Status(http.StatusMethodNotAllowed)
+	}
+
+	var payload struct {
+		Public bool
+		Short  string
+		URL    string
+	}
+
+	if err := req.ParseForm(); err != nil {
+		return response.Error(http.StatusBadRequest, errors.Wrap(err, "unable to decode form"))
+	}
+	payload.Public = req.PostForm.Get("Public") == "true"
+	payload.Short = req.PostForm.Get("Short")
+	payload.URL = req.PostForm.Get("URL")
+
+	if payload.Short == "" {
+		payload.Short = hash.Hash(fmt.Sprintf("%s-%d", payload.URL, mathrand.Int()))
+	}
+
+	ctx := req.Context()
+	if _, err := s.store.Publish(ctx, &db.Link{
+		Author: auth,
+		Public: payload.Public,
+		Short:  payload.Short,
+		URL:    payload.URL,
+	}); err == nil {
+		return response.Redirect(http.StatusTemporaryRedirect, "/")
+	} else if test := db.ValidationError(""); errors.As(err, &test) {
+		return response.Error(http.StatusBadRequest, test)
+	} else if test := db.ErrShortConflict; errors.As(err, &test) {
+		return response.Error(http.StatusBadRequest, test)
+	} else {
+		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "unable to store data"))
+	}
+}
+
+func (s *Server) root(req *http.Request) *response.Response {
 	if req.URL.Path == "/" {
-		s.landingPage(w, req)
-		return
+		return s.landingPage(req.Context())
 	}
 
 	l, err := s.store.Get(req.Context(), req.URL.Path[1:])
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, errors.Wrap(err, "get"))
-		return
+		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "get"))
 	}
 
 	if l == nil {
@@ -324,5 +393,5 @@ func (s *Server) root(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Use a 307 here to allow request forwarding.
-	writeRedirect(w, http.StatusTemporaryRedirect, l.URL)
+	return response.Redirect(http.StatusTemporaryRedirect, l.URL)
 }

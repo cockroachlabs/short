@@ -9,5 +9,7 @@ require (
 	github.com/spf13/pflag v1.0.3
 	github.com/stretchr/testify v1.4.0
 	golang.org/x/lint v0.0.0-20200130185559-910be7a94367
+	golang.org/x/tools v0.0.0-20200216192241-b320d3a0f5a2 // indirect
+	golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 // indirect
 	honnef.co/go/tools v0.0.1-2019.2.3
 )

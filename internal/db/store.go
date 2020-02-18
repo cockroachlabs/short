@@ -18,10 +18,16 @@ package db
 import (
 	"context"
 	"database/sql"
+	"runtime"
 
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 )
+
+type contextKey string
+
+// A typesafe key for storing a transaction in a context.
+const txKey = contextKey("tx")
 
 var (
 	// ErrShortConflict means that a conflicting short-name was chosen.
@@ -51,6 +57,7 @@ type Store struct {
 
 	click   *sql.Stmt
 	clicks  *sql.Stmt
+	delete  *sql.Stmt
 	get     *sql.Stmt
 	list    *sql.Stmt
 	publish *sql.Stmt
@@ -87,8 +94,15 @@ WHERE short = $1
 		return nil, err
 	}
 
+	if s.delete, err = db.PrepareContext(ctx, `
+DELETE FROM links
+WHERE short = $1
+`); err != nil {
+		return nil, err
+	}
+
 	if s.get, err = db.PrepareContext(ctx, `
-SELECT author, created_at, pub, short, updated_at, url
+SELECT author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE short=$1), short, updated_at, url
 FROM links
 WHERE short=$1
 `); err != nil {
@@ -96,7 +110,7 @@ WHERE short=$1
 	}
 
 	if s.list, err = db.PrepareContext(ctx, `
-SELECT author, created_at, pub, short, updated_at, url
+SELECT author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), short, updated_at, url
 FROM links
 WHERE author=$1
 ORDER BY updated_at DESC
@@ -109,7 +123,7 @@ INSERT INTO links (author, created_at, pub, short, updated_at, url)
 VALUES ($1, now(), $2, $3, now(), $4)
 ON CONFLICT (author, short, url) DO UPDATE
 SET pub = excluded.pub, updated_at = now()
-RETURNING author, created_at, pub, short, updated_at, url
+RETURNING author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE short=$3), short, updated_at, url
 `); err != nil {
 		return nil, err
 	}
@@ -127,24 +141,30 @@ SELECT
 
 // Click records a click on a short link.
 func (s *Store) Click(ctx context.Context, short string) error {
-	_, err := s.click.ExecContext(ctx, normalize(short))
+	_, err := tx(ctx, s.click).ExecContext(ctx, normalize(short))
 	return err
 }
 
 // Clicks returns the number of times that the link has been clicked.
 func (s *Store) Clicks(ctx context.Context, short string) (int, error) {
 	var count int
-	row := s.clicks.QueryRowContext(ctx, normalize(short))
+	row := tx(ctx, s.clicks).QueryRowContext(ctx, normalize(short))
 	if err := row.Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
+// Delete removes the given short link.
+func (s *Store) Delete(ctx context.Context, short string) error {
+	_, err := tx(ctx, s.delete).ExecContext(ctx, short)
+	return err
+}
+
 // Get locates a short link in the database, or returns nil if one
 // does not exist.
 func (s *Store) Get(ctx context.Context, short string) (*Link, error) {
-	return decode(s.get.QueryRowContext(ctx, normalize(short)))
+	return decode(tx(ctx, s.get).QueryRowContext(ctx, normalize(short)))
 }
 
 // List returns the Links that were created by the given author.
@@ -156,22 +176,19 @@ func (s *Store) List(ctx context.Context, author string) (<-chan *Link, <-chan e
 		defer close(links)
 		defer close(errs)
 
-		rows, err := s.list.QueryContext(ctx, author)
+		rows, err := tx(ctx, s.list).QueryContext(ctx, author)
 		if err != nil {
 			errs <- err
 			return
 		}
 
 		for rows.Next() {
-			var link *Link
-			if link, err = decode(rows); err == nil {
-				if link.Count, err = s.Clicks(ctx, link.Short); err == nil {
-					links <- link
-					continue
-				}
+			if link, err := decode(rows); err == nil {
+				links <- link
+			} else {
+				errs <- err
+				break
 			}
-			errs <- err
-			break
 		}
 		if err := rows.Err(); err != nil {
 			errs <- err
@@ -191,35 +208,73 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Publish stores or updates the link in the database.  This function
 // returns the latest value in the database.
-func (s *Store) Publish(ctx context.Context, l *Link) (*Link, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) Publish(ctx context.Context, l *Link) (_ *Link, err error) {
+	l, err = decode(tx(ctx, s.publish).QueryRowContext(ctx, l.Author, l.Public, normalize(l.Short), l.URL))
 	if err != nil {
-		return nil, err
-	}
-	l, err = decode(tx.Stmt(s.publish).QueryRowContext(ctx, l.Author, l.Public, normalize(l.Short), l.URL))
-	if err != nil {
-		ignore(tx.Rollback())
 		return nil, err
 	} else if err := l.Validate(); err != nil {
-		ignore(tx.Rollback())
 		return nil, err
 	} else {
-		return l, tx.Commit()
+		return l, nil
 	}
 }
 
 // Served returns global statistics.
 func (s *Store) Served(ctx context.Context) (links, clicks int, _ error) {
-	if err := s.served.QueryRow().Scan(&links, &clicks); err != nil {
+	if err := tx(ctx, s.served).QueryRowContext(ctx).Scan(&links, &clicks); err != nil {
 		return 0, 0, err
 	}
 	return
 }
 
-func decode(data scannable) (*Link, error) {
+// WithTransaction returns a new context that represents a database
+// transaction. If the given context already contains a transaction,
+// this method will return it. The transaction will be automatically
+// rolled back if the
+func (s *Store) WithTransaction(parent context.Context) (context.Context, *Tx, error) {
+	if parent.Value(txKey) != nil {
+		return parent, nil, nil
+	}
+
+	dbTx, err := s.db.BeginTx(parent, nil)
+	if err != nil {
+		return parent, nil, err
+	}
+	tx := &Tx{false, dbTx}
+	runtime.SetFinalizer(tx, func(tx *Tx) {
+		tx.Rollback()
+	})
+	ctx := context.WithValue(parent, txKey, tx)
+	return ctx, tx, nil
+}
+
+// Tx is a handle to an underlying database transaction.
+type Tx struct {
+	closed bool
+	tx     *sql.Tx
+}
+
+// Commit will commit the underlying database transaction.
+func (t *Tx) Commit() error {
+	t.closed = true
+	return t.tx.Commit()
+}
+
+// Rollback will abort the underlying database transaction.
+func (t *Tx) Rollback() {
+	if t.closed {
+		return
+	}
+	t.closed = true
+	_ = t.tx.Rollback()
+}
+
+func decode(data interface {
+	Scan(args ...interface{}) error
+}) (*Link, error) {
 	l := &Link{}
 
-	if err := data.Scan(&l.Author, &l.CreatedAt, &l.Public, &l.Short, &l.UpdatedAt, &l.URL); err != nil {
+	if err := data.Scan(&l.Author, &l.CreatedAt, &l.Public, &l.Count, &l.Short, &l.UpdatedAt, &l.URL); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
@@ -233,8 +288,11 @@ func decode(data scannable) (*Link, error) {
 	return l, nil
 }
 
-type scannable interface {
-	Scan(args ...interface{}) error
+// Attach the given statement to the transaction associated with the
+// context, if one exists, and return the statement.
+func tx(ctx context.Context, stmt *sql.Stmt) *sql.Stmt {
+	if tx, ok := ctx.Value(txKey).(*Tx); ok {
+		return tx.tx.Stmt(stmt)
+	}
+	return stmt
 }
-
-func ignore(_ error) {}
