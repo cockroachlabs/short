@@ -20,6 +20,8 @@ import (
 	"database/sql"
 	"runtime"
 
+	"log"
+
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
 )
@@ -50,6 +52,12 @@ CREATE TABLE IF NOT EXISTS clicks (
 )`,
 	}
 )
+
+// GlobalStas summarizes the total usage.
+type GlobalStats struct {
+	Clicks int
+	Links  int
+}
 
 // Store provides access to the short-link data.
 type Store struct {
@@ -168,17 +176,15 @@ func (s *Store) Get(ctx context.Context, short string) (*Link, error) {
 }
 
 // List returns the Links that were created by the given author.
-func (s *Store) List(ctx context.Context, author string) (<-chan *Link, <-chan error) {
+func (s *Store) List(ctx context.Context, author string) (<-chan *Link, error) {
 	links := make(chan *Link, 1)
-	errs := make(chan error, 3)
 
 	go func() {
 		defer close(links)
-		defer close(errs)
 
 		rows, err := tx(ctx, s.list).QueryContext(ctx, author)
 		if err != nil {
-			errs <- err
+			log.Printf("listing for %s: %v", author, err)
 			return
 		}
 
@@ -186,19 +192,17 @@ func (s *Store) List(ctx context.Context, author string) (<-chan *Link, <-chan e
 			if link, err := decode(rows); err == nil {
 				links <- link
 			} else {
-				errs <- err
-				break
+				log.Printf("could not decode row for %s: %v", author, err)
+				return
 			}
 		}
 		if err := rows.Err(); err != nil {
-			errs <- err
+			log.Printf("query failure for %s: %v", author, err)
 		}
-		if err := rows.Close(); err != nil {
-			errs <- err
-		}
+		_ = rows.Close()
 	}()
 
-	return links, errs
+	return links, nil
 }
 
 // Ping checks the database connection.
@@ -220,11 +224,12 @@ func (s *Store) Publish(ctx context.Context, l *Link) (_ *Link, err error) {
 }
 
 // Served returns global statistics.
-func (s *Store) Served(ctx context.Context) (links, clicks int, _ error) {
-	if err := tx(ctx, s.served).QueryRowContext(ctx).Scan(&links, &clicks); err != nil {
-		return 0, 0, err
+func (s *Store) Served(ctx context.Context) (*GlobalStats, error) {
+	ret := &GlobalStats{}
+	if err := tx(ctx, s.served).QueryRowContext(ctx).Scan(&ret.Links, &ret.Clicks); err != nil {
+		return nil, err
 	}
-	return
+	return ret, nil
 }
 
 // WithTransaction returns a new context that represents a database

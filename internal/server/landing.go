@@ -18,38 +18,72 @@ import (
 	"context"
 	"html/template"
 	"net/http"
+	"time"
 
 	"github.com/cockroachlabs/short/internal/assets"
+	"github.com/cockroachlabs/short/internal/db"
 	"github.com/cockroachlabs/short/internal/server/response"
+	"github.com/pkg/errors"
 )
 
-var landing *template.Template
-
-func init() {
-	var err error
-	landing, err = template.New("landing").Parse(string(assets.Assets["landing.html"].Data))
-	if err != nil {
-		panic(err)
-	}
+type cachedTemplate struct {
+	*template.Template
+	mTime time.Time
 }
 
-func (s *Server) landingPage(ctx context.Context) *response.Response {
-	auth := authFrom(ctx)
-	links, _ := s.store.List(ctx, auth)
-	totalLinks, totalClicks, err := s.store.Served(ctx)
+type templateData struct {
+	Ctx   context.Context
+	Store *db.Store
+	User  string
+}
+
+func (s *Server) page(ctx context.Context, path string) *response.Response {
+	template, err := s.template(path)
 	if err != nil {
 		return response.Error(http.StatusInternalServerError, err)
 	}
 
-	data := map[string]interface{}{
-		"TotalClicks": totalClicks,
-		"TotalLinks":  totalLinks,
-		"Links":       links,
-		"User":        auth,
+	data := &templateData{
+		Ctx:   ctx,
+		Store: s.store,
+		User:  authFrom(ctx),
 	}
 
 	return response.Func(func(w http.ResponseWriter) error {
 		w.Header().Set(contentType, "text/html; charset=UTF-8")
-		return landing.Execute(w, data)
+		return template.Execute(w, data)
 	})
+}
+
+func (s *Server) template(path string) (*cachedTemplate, error) {
+	asset := assets.Get(path)
+	if asset == nil {
+		return nil, errors.New("not found")
+	}
+
+	stat, err := asset.Stat()
+	if err != nil {
+		return nil, errors.Wrapf(err, "template %s:", path)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	found := s.mu.templates[path]
+	if found == nil || found.mTime.Before(stat.ModTime()) {
+		data := make([]byte, stat.Size())
+		if _, err := asset.Read(data); err != nil {
+			return nil, errors.Wrapf(err, "reading %s:", path)
+		}
+		if parsed, err := template.New(path).Parse(string(data)); err == nil {
+			found = &cachedTemplate{
+				mTime:    stat.ModTime(),
+				Template: parsed,
+			}
+			s.mu.templates[path] = found
+		} else {
+			return nil, errors.Wrapf(err, "parsing %s:", path)
+		}
+	}
+	return found, nil
 }

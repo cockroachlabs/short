@@ -93,7 +93,7 @@ func (s *slurp) run() error {
 	fmt.Fprintf(out, "package %s\n", s.pkg)
 	fmt.Fprintf(out, `import "time"`)
 	fmt.Fprintf(out, "\n\n// Assets to be served.\n")
-	fmt.Fprintf(out, "var Assets = map[string]struct{ContentType string; MTime time.Time; Data[] byte;} {\n")
+	fmt.Fprintf(out, "var assets = map[string]struct{ContentType string; MTime time.Time; Data[] byte;} {\n")
 	for _, inc := range include {
 		stat, err := os.Stat(inc)
 		if err != nil {

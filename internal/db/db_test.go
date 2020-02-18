@@ -93,8 +93,8 @@ func TestDB(t *testing.T) {
 			a.NoError(err)
 		}
 
-		count, _, err := s.Served(ctx)
-		a.Equal(1, count)
+		stats, err := s.Served(ctx)
+		a.Equal(1, stats.Links)
 		a.NoError(err)
 	})
 
@@ -134,9 +134,9 @@ func TestDB(t *testing.T) {
 	t.Run("totals", func(t *testing.T) {
 		a := assert.New(t)
 
-		links, clicks, err := s.Served(ctx)
-		a.Equal(2, links)
-		a.Equal(2, clicks)
+		stats, err := s.Served(ctx)
+		a.Equal(2, stats.Links)
+		a.Equal(2, stats.Clicks)
 		a.NoError(err)
 	})
 
@@ -145,9 +145,9 @@ func TestDB(t *testing.T) {
 
 		a.NoError(s.Delete(ctx, "foobar"))
 
-		links, clicks, err := s.Served(ctx)
-		a.Equal(1, links)
-		a.Equal(0, clicks)
+		stats, err := s.Served(ctx)
+		a.Equal(1, stats.Links)
+		a.Equal(0, stats.Clicks)
 		a.NoError(err)
 	})
 

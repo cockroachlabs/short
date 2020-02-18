@@ -1,3 +1,4 @@
+{{- /*gotype: github.com/cockroachlabs/short/internal/server.templateData*/ -}}
 <!DOCTYPE html>
 <html>
 <head>
@@ -68,8 +69,9 @@
 </head>
 <body>
 <img src="/_/asset/wordmark.svg" height="48px"/>
+{{- $stats := .Store.Served .Ctx -}}
 <p>Welcome {{.User}}! This is a link-shortening service running on a Cockroach Cloud
-    DB. {{.TotalLinks}} links and {{.TotalClicks}} clicks served.</p>
+    DB. {{$stats.Links}} links and {{$stats.Clicks}} clicks served.</p>
 <p>Create a new link:</p>
 <form action="/_/v1/publish" method="post" class="new">
     <div class="line">
@@ -89,18 +91,18 @@
     </div>
 </form>
 <p>Your links:</p>
-{{range .Links}}{{- /*gotype: github.com/cockroachlabs/short/internal/db.Link*/ -}}
-<div class="links">
-    {{ if .Public }}
-        <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
-        <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
-    {{ else }}
-        <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
-        <a class="short" href="/{{.Short}}">{{.Short}}</a>
-    {{ end }}
-    <span class="url">{{.URL}}</span>
-    <span class="count">{{.Count}} Clicks</span>
-</div>
+{{range (.Store.List .Ctx .User)}}
+    <div class="links">
+        {{ if .Public }}
+            <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
+            <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
+        {{ else }}
+            <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
+            <a class="short" href="/{{.Short}}">{{.Short}}</a>
+        {{ end }}
+        <span class="url">{{.URL}}</span>
+        <span class="count">{{.Count}} Clicks</span>
+    </div>
 {{end}}
 </body>
 </html>

@@ -16,7 +16,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -35,6 +34,8 @@ import (
 	"time"
 
 	"path"
+
+	"sync"
 
 	"github.com/cockroachlabs/short/internal/assets"
 	"github.com/cockroachlabs/short/internal/db"
@@ -57,11 +58,18 @@ type Server struct {
 	forceUser string
 	httpOnly  bool
 	store     *db.Store
+
+	mu struct {
+		sync.Mutex
+		templates map[string]*cachedTemplate
+	}
 }
 
 // New constructs a Server that will be configured by the flag set.
 func New(flags *pflag.FlagSet) *Server {
 	s := &Server{}
+	s.mu.templates = make(map[string]*cachedTemplate)
+	flags.StringVar(&assets.AssetPath, "assetPath", "", "for development use")
 	flags.StringVarP(&s.bind, "bind", "b", ":443", "the address to bind to")
 	flags.StringVarP(&s.conn, "conn", "c", "", "the database connection string")
 	flags.BoolVar(&s.httpOnly, "httpOnly", false, "bind HTTP instead of HTTPS")
@@ -161,11 +169,15 @@ func (s *Server) asset(r *http.Request) *response.Response {
 		return response.Status(http.StatusMethodNotAllowed)
 	}
 	p := r.URL.Path[9:]
-	if asset, ok := assets.Assets[p]; ok {
+	if asset := assets.Get(p); asset != nil {
 		return response.Func(func(w http.ResponseWriter) error {
 			// Use pre-computed content type.
-			w.Header().Set(contentType, asset.ContentType)
-			http.ServeContent(w, r, p, asset.MTime, bytes.NewReader(asset.Data))
+			w.Header().Set(contentType, asset.ContentType())
+			stat, err := asset.Stat()
+			if err != nil {
+				return err
+			}
+			http.ServeContent(w, r, p, stat.ModTime(), asset)
 			return nil
 		})
 	}
@@ -373,7 +385,7 @@ func (s *Server) publish(req *http.Request) *response.Response {
 
 func (s *Server) root(req *http.Request) *response.Response {
 	if req.URL.Path == "/" {
-		return s.landingPage(req.Context())
+		return s.page(req.Context(), "landing.html")
 	}
 
 	l, err := s.store.Get(req.Context(), req.URL.Path[1:])
