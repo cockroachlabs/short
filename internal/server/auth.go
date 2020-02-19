@@ -22,9 +22,10 @@ import (
 	"github.com/cockroachlabs/short/internal/server/response"
 )
 
-type contextKey string
+type contextKey int
 
-const authUser = contextKey("auth")
+// A typesafe key for the user associated with the context.
+const authUser contextKey = iota
 
 // authFrom extracts the currently-authorized user from the context.
 func authFrom(ctx context.Context) string {

@@ -26,10 +26,10 @@ import (
 	"github.com/pkg/errors"
 )
 
-type contextKey string
+type contextKey int
 
 // A typesafe key for storing a transaction in a context.
-const txKey = contextKey("tx")
+const txKey contextKey = iota
 
 var (
 	// ErrShortConflict means that a conflicting short-name was chosen.
