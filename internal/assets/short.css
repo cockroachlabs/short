@@ -14,19 +14,30 @@
  * limitations under the License.
  */
 
-body {
-    max-width: 800px;
-}
-
-p {
-    margin: 0;
-}
 
 .box {
     border: thin solid #37A806;
     border-radius: 10px;
     padding: 10px;
     margin: 10px;
+}
+
+a.edit {
+    flex: 1 1 5%;
+    cursor: pointer;
+    text-align: center;
+}
+
+a.short {
+    flex: 0 0 auto;
+}
+
+body {
+    max-width: 800px;
+}
+
+p {
+    margin: 0;
 }
 
 form.new {
@@ -37,12 +48,6 @@ form.new {
 form.new div.line {
     display: flex;
     margin-block-start: 0.5ex;
-}
-
-label {
-    flex: 0 1 50%;
-    text-align: right;
-    padding-right: 1em;
 }
 
 input[type=text], input[type=url] {
@@ -63,34 +68,36 @@ div.link:hover {
     background: #6cf4b0;
 }
 
-a.edit {
-    flex: 1 1 5%;
-    cursor: pointer;
-    text-align: center;
+div.link > a, div.link > span {
+    margin-inline-start: 0.5em;
+    margin-inline-end: 0.5em;
 }
 
-a.short {
-    flex: 1 1 25%;
+label {
+    flex: 0 1 50%;
+    text-align: right;
+    padding-inline-end: 1em;
 }
 
 span.author {
-    flex: 1 1 5%;
+    flex: 1 1 auto;
     text-align: right;
 }
 
 span.copy {
-    flex: 1 1 5%;
+    flex: 0 0 auto;
     cursor: pointer;
     text-align: center;
 }
 
 span.count {
-    flex: 0 1 10%;
+    flex: 0 0 auto;
     text-align: right;
 }
 
 span.url {
-    flex: 1 1 50%;
+    flex: 1 1 100%;
     text-align: right;
-    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 10ex;
 }
