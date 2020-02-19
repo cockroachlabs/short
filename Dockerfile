@@ -3,7 +3,7 @@ ENV workdir /build
 WORKDIR $workdir
 COPY . .
 
-RUN go install -v ./cmd/short
+RUN go generate ./... && go install -v ./cmd/short
 
 VOLUME ["/data"]
 WORKDIR /data
