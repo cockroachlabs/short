@@ -33,7 +33,7 @@ const txKey contextKey = iota
 
 var (
 	// ErrShortConflict means that a conflicting short-name was chosen.
-	ErrShortConflict = errors.New("the requested server link name already exists")
+	ErrShortConflict = errors.New("the requested short link name already exists")
 
 	schema = []string{`
 CREATE TABLE IF NOT EXISTS links (
@@ -104,7 +104,7 @@ WHERE short = $1
 
 	if s.delete, err = db.PrepareContext(ctx, `
 DELETE FROM links
-WHERE short = $1
+WHERE short = $1 AND author = $2
 `); err != nil {
 		return nil, err
 	}
@@ -129,8 +129,8 @@ ORDER BY updated_at DESC
 	if s.publish, err = db.PrepareContext(ctx, `
 INSERT INTO links (author, created_at, pub, short, updated_at, url)
 VALUES ($1, now(), $2, $3, now(), $4)
-ON CONFLICT (author, short, url) DO UPDATE
-SET pub = excluded.pub, updated_at = now()
+ON CONFLICT (short) DO UPDATE
+SET pub = excluded.pub, updated_at = now(), url = excluded.url WHERE links.author = excluded.author
 RETURNING author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE short=$3), short, updated_at, url
 `); err != nil {
 		return nil, err
@@ -163,9 +163,9 @@ func (s *Store) Clicks(ctx context.Context, short string) (int, error) {
 	return count, nil
 }
 
-// Delete removes the given short link.
-func (s *Store) Delete(ctx context.Context, short string) error {
-	_, err := tx(ctx, s.delete).ExecContext(ctx, short)
+// Delete removes the given short link if it is owned by author.
+func (s *Store) Delete(ctx context.Context, short, author string) error {
+	_, err := tx(ctx, s.delete).ExecContext(ctx, short, author)
 	return err
 }
 
@@ -216,6 +216,8 @@ func (s *Store) Publish(ctx context.Context, l *Link) (_ *Link, err error) {
 	l, err = decode(tx(ctx, s.publish).QueryRowContext(ctx, l.Author, l.Public, normalize(l.Short), l.URL))
 	if err != nil {
 		return nil, err
+	} else if l == nil {
+		return nil, ErrShortConflict
 	} else if err := l.Validate(); err != nil {
 		return nil, err
 	} else {
@@ -246,8 +248,12 @@ func (s *Store) WithTransaction(parent context.Context) (context.Context, *Tx, e
 		return parent, nil, err
 	}
 	tx := &Tx{false, dbTx}
+	// Ensure that transactions will eventually get cleaned up.
 	runtime.SetFinalizer(tx, func(tx *Tx) {
-		tx.Rollback()
+		if !tx.closed {
+			log.Printf("transaction open at finalization")
+			tx.Rollback()
+		}
 	})
 	ctx := context.WithValue(parent, txKey, tx)
 	return ctx, tx, nil

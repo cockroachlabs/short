@@ -4,58 +4,7 @@
 <head>
     <title>go/</title>
     <link rel="icon" href="/_/asset/symbol.png"/>
-    <style type="text/css">
-        form.new {
-            display: flex;
-            flex-flow: column;
-            border: thin solid #37A806;
-            border-radius: 10px;
-            padding: 10px;
-        }
-
-        form.new div.line {
-            display: flex;
-        }
-
-        label {
-            flex: 0 1 50%;
-            text-align: right;
-            padding-right: 1em;
-        }
-
-        input[type=text], input[type=url] {
-            flex-grow: 1;
-        }
-
-        input[type=submit] {
-            margin-left: auto;
-            font-size: x-large;
-        }
-
-        div.links {
-            display: flex;
-        }
-
-        a.short {
-            flex: 1 1 25%;
-        }
-
-        span.copy {
-            flex: 1 1 5%;
-            cursor: pointer;
-        }
-
-        span.count {
-            flex: 0 1 10%;
-            text-align: right;
-        }
-
-        span.url {
-            flex: 1 1 50%;
-            text-align: right;
-            overflow-x: auto;
-        }
-    </style>
+    <link rel="stylesheet" href="/_/asset/short.css"/>
     <script>
         function copyLink(elt, short) {
             navigator.clipboard.writeText(location.protocol + '//' + location.hostname + '/' + short);
@@ -72,37 +21,42 @@
 {{- $stats := .Store.Served .Ctx -}}
 <p>Welcome {{.User}}! This is a link-shortening service running on a Cockroach Cloud
     DB. {{$stats.Links}} links and {{$stats.Clicks}} clicks served.</p>
-<p>Create a new link:</p>
-<form action="/_/v1/publish" method="post" class="new">
-    <div class="line">
-        <label for="URL">URL to link to</label>
-        <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required/>
-    </div>
-    <div class="line">
-        <label for="Short">Vanity link (optional) </label>
-        <span>go/</span>
-        <input id="Short" name="Short" type="text" placeholder="MyVanityLink"
-               pattern="[a-zA-Z0-9]*"/>
-    </div>
-    <div class="line">
-        <label for="Public">Make public (to the whole world)</label>
-        <input id="Public" name="Public" type="checkbox" value="true"/>
-        <input type="submit" value="Go!"/>
-    </div>
-</form>
-<p>Your links:</p>
-{{range (.Store.List .Ctx .User)}}
-    <div class="links">
-        {{- if .Public -}}
-            <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
-            <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
-        {{- else -}}
-            <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
-            <a class="short" href="/{{.Short}}">{{.Short}}</a>
-        {{- end -}}
-        <span class="url">{{.URL}}</span>
-        <span class="count">{{.Count}} Clicks</span>
-    </div>
-{{end}}
+<div class="box">
+    <p>Create a new link:</p>
+    <form action="/_/v1/publish" method="post" class="new">
+        <div class="line">
+            <label for="URL">URL to link to</label>
+            <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required/>
+        </div>
+        <div class="line">
+            <label for="Short">Vanity link (optional) </label>
+            <span>go/</span>
+            <input id="Short" name="Short" type="text" placeholder="MyVanityLink"
+                   pattern="[a-zA-Z0-9]*"/>
+        </div>
+        <div class="line">
+            <label for="Public">Make public (to the whole world)</label>
+            <input id="Public" name="Public" type="checkbox" value="true"/>
+            <input type="submit" value="Go!"/>
+        </div>
+    </form>
+</div>
+<div class="box">
+    <p>Your links:</p>
+    {{range (.Store.List .Ctx .User)}}
+        <div class="link">
+            {{- if .Public -}}
+                <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
+                <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
+            {{- else -}}
+                <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
+                <a class="short" href="/{{.Short}}">{{.Short}}</a>
+            {{- end -}}
+            <span class="url">{{.URL}}</span>
+            <span class="count">{{.Count}} Clicks</span>
+            <a class="edit" href="/_/edit/{{.Short}}">Edit</a>
+        </div>
+    {{end}}
+</div>
 </body>
 </html>

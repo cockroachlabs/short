@@ -48,6 +48,7 @@ import (
 const (
 	applicationJSON = "application/json"
 	contentType     = "Content-Type"
+	textHtml        = "text/html; charset=UTF-8"
 )
 
 // Server handles the HTTP API and the UI.
@@ -91,6 +92,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_/asset/", s.handler(authRequired, s.asset))
+	mux.HandleFunc("/_/edit/", s.handler(authRequired, s.edit))
 	mux.HandleFunc("/_/healthz", s.handler(authPublic, s.healthz))
 	mux.HandleFunc("/_/v1/link/", s.handler(authRequired, s.crud))
 	mux.HandleFunc("/_/v1/publish", s.handler(authRequired, s.publish))
@@ -254,7 +256,7 @@ func (s *Server) crudDelete(req *http.Request, short string) *response.Response 
 	if link.Author != author {
 		return response.Status(http.StatusForbidden)
 	}
-	if err := s.store.Delete(ctx, short); err != nil {
+	if err := s.store.Delete(ctx, short, author); err != nil {
 		return response.Error(http.StatusInternalServerError, err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -350,14 +352,16 @@ func (s *Server) publish(req *http.Request) *response.Response {
 	}
 
 	var payload struct {
-		Public bool
-		Short  string
-		URL    string
+		OriginalShort string
+		Public        bool
+		Short         string
+		URL           string
 	}
 
 	if err := req.ParseForm(); err != nil {
 		return response.Error(http.StatusBadRequest, errors.Wrap(err, "unable to decode form"))
 	}
+	payload.OriginalShort = req.PostForm.Get("OriginalShort")
 	payload.Public = req.PostForm.Get("Public") == "true"
 	payload.Short = req.PostForm.Get("Short")
 	payload.URL = req.PostForm.Get("URL")
@@ -366,13 +370,26 @@ func (s *Server) publish(req *http.Request) *response.Response {
 		payload.Short = hash.Hash(fmt.Sprintf("%s-%d", payload.URL, mathrand.Int()))
 	}
 
-	ctx := req.Context()
+	ctx, tx, err := s.store.WithTransaction(req.Context())
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, err)
+	}
+
+	if payload.OriginalShort != payload.Short {
+		if err := s.store.Delete(ctx, payload.OriginalShort, auth); err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
+	}
+
 	if _, err := s.store.Publish(ctx, &db.Link{
 		Author: auth,
 		Public: payload.Public,
 		Short:  payload.Short,
 		URL:    payload.URL,
 	}); err == nil {
+		if err := tx.Commit(); err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
 		return response.Redirect(http.StatusTemporaryRedirect, "/")
 	} else if test := db.ValidationError(""); errors.As(err, &test) {
 		return response.Error(http.StatusBadRequest, test)
@@ -383,9 +400,54 @@ func (s *Server) publish(req *http.Request) *response.Response {
 	}
 }
 
+func (s *Server) edit(req *http.Request) *response.Response {
+	ctx := req.Context()
+	short := path.Base(req.URL.Path)
+
+	tmpl, err := s.template("edit.html")
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, err)
+	}
+
+	link, err := s.store.Get(ctx, short)
+	if err != nil {
+		return response.Error(http.StatusInternalServerError, err)
+	}
+	if link == nil {
+		return response.Status(http.StatusNotFound)
+	}
+
+	data := &templateData{
+		Ctx:   ctx,
+		Link:  link,
+		Store: s.store,
+		User:  authFrom(ctx),
+	}
+
+	return response.Func(func(w http.ResponseWriter) error {
+		w.Header().Set(contentType, textHtml)
+		return tmpl.Execute(w, data)
+	})
+}
+
 func (s *Server) root(req *http.Request) *response.Response {
 	if req.URL.Path == "/" {
-		return s.page(req.Context(), "landing.html")
+		ctx := req.Context()
+		tmpl, err := s.template("landing.html")
+		if err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
+
+		data := &templateData{
+			Ctx:   ctx,
+			Store: s.store,
+			User:  authFrom(ctx),
+		}
+
+		return response.Func(func(w http.ResponseWriter) error {
+			w.Header().Set(contentType, textHtml)
+			return tmpl.Execute(w, data)
+		})
 	}
 
 	l, err := s.store.Get(req.Context(), req.URL.Path[1:])

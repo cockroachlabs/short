@@ -85,12 +85,11 @@ func TestDB(t *testing.T) {
 		a.NoError(err)
 		a.True(l2.Public)
 
-		links, errs := s.List(ctx, "test")
+		links, err := s.List(ctx, "test")
+		a.NoError(err)
 		select {
 		case link := <-links:
 			a.Equal(l2, link)
-		case err := <-errs:
-			a.NoError(err)
 		}
 
 		stats, err := s.Served(ctx)
@@ -143,7 +142,7 @@ func TestDB(t *testing.T) {
 	t.Run("delete", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(s.Delete(ctx, "foobar"))
+		a.NoError(s.Delete(ctx, "foobar", "test"))
 
 		stats, err := s.Served(ctx)
 		a.Equal(1, stats.Links)

@@ -1,0 +1,34 @@
+{{- /*gotype: github.com/cockroachlabs/short/internal/server.templateData*/ -}}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>go/{{ .Link.Short }}</title>
+    <link rel="icon" href="/_/asset/symbol.png"/>
+    <link rel="stylesheet" href="/_/asset/short.css"/>
+</head>
+<body>
+<form action="/_/v1/publish" method="post" class="new box">
+    <input type="hidden" name="OriginalShort" value="{{ .Link.Short }}"/>
+    <div class="line">
+        <label for="URL">URL to link to</label>
+        <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required
+               value="{{ .Link.URL }}"/>
+    </div>
+    <div class="line">
+        <label for="Short">Vanity link (optional) </label>
+        <span>go/</span>
+        <input id="Short" name="Short" type="text" placeholder="MyVanityLink"
+               pattern="[a-zA-Z0-9]*" value="{{ .Link.Short }}"/>
+    </div>
+    <div class="line">
+        <label for="Public">Make public (to the whole world)</label>
+        {{ if .Link.Public }}
+            <input id="Public" name="Public" type="checkbox" value="true" checked/>
+        {{ else }}
+            <input id="Public" name="Public" type="checkbox" value="true"/>
+        {{ end }}
+        <input type="submit" value="Go!"/>
+    </div>
+</form>
+</body>
+</html>

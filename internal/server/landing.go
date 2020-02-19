@@ -17,12 +17,10 @@ package server
 import (
 	"context"
 	"html/template"
-	"net/http"
 	"time"
 
 	"github.com/cockroachlabs/short/internal/assets"
 	"github.com/cockroachlabs/short/internal/db"
-	"github.com/cockroachlabs/short/internal/server/response"
 	"github.com/pkg/errors"
 )
 
@@ -32,27 +30,11 @@ type cachedTemplate struct {
 }
 
 type templateData struct {
-	Ctx   context.Context
+	Ctx context.Context
+	// Link will be present for editing flow.
+	Link  *db.Link
 	Store *db.Store
 	User  string
-}
-
-func (s *Server) page(ctx context.Context, path string) *response.Response {
-	tmpl, err := s.template(path)
-	if err != nil {
-		return response.Error(http.StatusInternalServerError, err)
-	}
-
-	data := &templateData{
-		Ctx:   ctx,
-		Store: s.store,
-		User:  authFrom(ctx),
-	}
-
-	return response.Func(func(w http.ResponseWriter) error {
-		w.Header().Set(contentType, "text/html; charset=UTF-8")
-		return tmpl.Execute(w, data)
-	})
 }
 
 func (s *Server) template(path string) (*cachedTemplate, error) {
