@@ -27,7 +27,7 @@ import (
 	"github.com/cockroachlabs/short/internal/minify"
 )
 
-//go:generate go run github.com/cockroachlabs/short/cmd/slurp -i .png -i .svg -i .html
+//go:generate go run github.com/cockroachlabs/short/cmd/slurp -i .css -i .png -i .svg -i .html
 
 // AssetPath is a developer flag to load asset data from disk instead of
 // using a built-in map.
