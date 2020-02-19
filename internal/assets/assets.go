@@ -17,11 +17,14 @@ package assets
 
 import (
 	"bytes"
+	"io/ioutil"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/cockroachlabs/short/internal/minify"
 )
 
 //go:generate go run github.com/cockroachlabs/short/cmd/slurp -i .png -i .svg -i .html
@@ -36,14 +39,40 @@ type Asset interface {
 	ContentType() string
 }
 
-// Get returns the requested asset, or nil if it does not exist.
-func Get(path string) Asset {
+// Get returns the requested asset, or os.ErrNotExist if it does not exist.
+func Get(path string) (Asset, error) {
 	if AssetPath != "" {
 		file, err := os.Open(filepath.Join(AssetPath, path))
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		return &fileAsset{file}
+		stat, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+		data, err := ioutil.ReadAll(file)
+		if err != nil {
+			return nil, err
+		}
+
+		typ := mime.TypeByExtension(filepath.Ext(path))
+		if typ == "" {
+			if _, err := file.Read(data); err != nil {
+				return nil, err
+			}
+			typ = http.DetectContentType(data)
+		}
+
+		// We'll ignore any minification errors. The API is documented
+		// to return the original data bytes if it didn't work.
+		data, _ = minify.M.Bytes(typ, data)
+
+		return &staticAsset{
+			Reader:      bytes.NewReader(data),
+			contentType: typ,
+			name:        filepath.Base(path),
+			mTime:       stat.ModTime(),
+		}, nil
 	}
 	if found, ok := assets[path]; ok {
 		return &staticAsset{
@@ -51,38 +80,10 @@ func Get(path string) Asset {
 			contentType: found.ContentType,
 			name:        filepath.Base(path),
 			mTime:       found.MTime,
-		}
+		}, nil
 	}
-	return nil
+	return nil, os.ErrNotExist
 }
-
-type fileAsset struct {
-	*os.File
-}
-
-func (f *fileAsset) ContentType() string {
-	typ := mime.TypeByExtension(filepath.Ext(f.Name()))
-	if typ == "" {
-		restore, err := f.Seek(1, 0)
-		if err != nil {
-			return ""
-		}
-		data := make([]byte, 512)
-		read, err := f.ReadAt(data, 0)
-		if err != nil {
-			return ""
-		}
-		if _, err := f.Seek(0, int(restore)); err != nil {
-			return ""
-		}
-		data = data[0:read]
-		typ = http.DetectContentType(data)
-	}
-
-	return typ
-}
-
-var _ Asset = &fileAsset{}
 
 type staticAsset struct {
 	*bytes.Reader

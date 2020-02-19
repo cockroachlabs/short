@@ -169,7 +169,7 @@ func (s *Server) asset(r *http.Request) *response.Response {
 		return response.Status(http.StatusMethodNotAllowed)
 	}
 	p := r.URL.Path[9:]
-	if asset := assets.Get(p); asset != nil {
+	if asset, _ := assets.Get(p); asset != nil {
 		return response.Func(func(w http.ResponseWriter) error {
 			// Use pre-computed content type.
 			w.Header().Set(contentType, asset.ContentType())

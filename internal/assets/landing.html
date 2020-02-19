@@ -93,13 +93,13 @@
 <p>Your links:</p>
 {{range (.Store.List .Ctx .User)}}
     <div class="links">
-        {{ if .Public }}
+        {{- if .Public -}}
             <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
             <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
-        {{ else }}
+        {{- else -}}
             <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
             <a class="short" href="/{{.Short}}">{{.Short}}</a>
-        {{ end }}
+        {{- end -}}
         <span class="url">{{.URL}}</span>
         <span class="count">{{.Count}} Clicks</span>
     </div>

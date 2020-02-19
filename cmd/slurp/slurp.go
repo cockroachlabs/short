@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cockroachlabs/short/internal/minify"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 )
@@ -110,6 +111,10 @@ func (s *slurp) run() error {
 		rel, _ := filepath.Rel(s.directory, inc)
 		fmt.Fprintf(out, "%q: {%q, time.Unix(0, %d), []byte{",
 			rel, typ, stat.ModTime().UnixNano())
+
+		// Pre-minify the data.
+		data, _ = minify.M.Bytes(typ, data)
+
 		for _, byte := range data {
 			fmt.Fprintf(out, "0x%x, ", byte)
 		}

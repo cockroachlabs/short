@@ -38,7 +38,7 @@ type templateData struct {
 }
 
 func (s *Server) page(ctx context.Context, path string) *response.Response {
-	template, err := s.template(path)
+	tmpl, err := s.template(path)
 	if err != nil {
 		return response.Error(http.StatusInternalServerError, err)
 	}
@@ -51,14 +51,14 @@ func (s *Server) page(ctx context.Context, path string) *response.Response {
 
 	return response.Func(func(w http.ResponseWriter) error {
 		w.Header().Set(contentType, "text/html; charset=UTF-8")
-		return template.Execute(w, data)
+		return tmpl.Execute(w, data)
 	})
 }
 
 func (s *Server) template(path string) (*cachedTemplate, error) {
-	asset := assets.Get(path)
-	if asset == nil {
-		return nil, errors.New("not found")
+	asset, err := assets.Get(path)
+	if err != nil {
+		return nil, errors.Wrapf(err, "path %s:", path)
 	}
 
 	stat, err := asset.Stat()
@@ -75,6 +75,7 @@ func (s *Server) template(path string) (*cachedTemplate, error) {
 		if _, err := asset.Read(data); err != nil {
 			return nil, errors.Wrapf(err, "reading %s:", path)
 		}
+
 		if parsed, err := template.New(path).Parse(string(data)); err == nil {
 			found = &cachedTemplate{
 				mTime:    stat.ModTime(),
