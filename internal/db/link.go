@@ -24,13 +24,14 @@ import (
 
 // Link is a shortened link.
 type Link struct {
-	Author    string
-	CreatedAt time.Time
-	Count     int
-	Public    bool
-	Short     string
-	UpdatedAt time.Time
-	URL       string
+	Author    string    // Only the owner can update
+	CreatedAt time.Time // Creation time
+	Count     int       // Number of times clicked
+	Listed    bool      // Appears on the front page
+	Public    bool      // Accessible from outside
+	Short     string    // The unique short-link value
+	UpdatedAt time.Time // Last-updated time
+	URL       string    // A well-formed URL
 }
 
 // Validate returns nil if the link is well-formed for storage.

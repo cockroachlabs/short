@@ -18,7 +18,15 @@
         <label for="Short">Vanity link (optional) </label>
         <span>go/</span>
         <input id="Short" name="Short" type="text" placeholder="MyVanityLink"
-               pattern="[a-zA-Z0-9]*" value="{{ .Link.Short }}"/>
+               pattern="[\-a-zA-Z0-9]*" value="{{ .Link.Short }}"/>
+    </div>
+    <div class="line">
+        <label for="Listed">List for other CRL users</label>
+        {{ if .Link.Listed }}
+            <input id="Listed" name="Listed" type="checkbox" value="true" checked/>
+        {{ else }}
+            <input id="Listed" name="Listed" type="checkbox" value="true"/>
+        {{ end }}
     </div>
     <div class="line">
         <label for="Public">Make public (to the whole world)</label>

@@ -63,17 +63,22 @@ div.link:hover {
     background: #6cf4b0;
 }
 
-a.short {
-    flex: 1 1 25%;
-}
-
-span.copy {
+a.edit {
     flex: 1 1 5%;
     cursor: pointer;
     text-align: center;
 }
 
-a.edit {
+a.short {
+    flex: 1 1 25%;
+}
+
+span.author {
+    flex: 1 1 5%;
+    text-align: right;
+}
+
+span.copy {
     flex: 1 1 5%;
     cursor: pointer;
     text-align: center;

@@ -26,13 +26,18 @@
     <form action="/_/v1/publish" method="post" class="new">
         <div class="line">
             <label for="URL">URL to link to</label>
-            <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required/>
+            <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required
+                   autofocus/>
         </div>
         <div class="line">
             <label for="Short">Vanity link (optional) </label>
             <span>go/</span>
             <input id="Short" name="Short" type="text" placeholder="MyVanityLink"
-                   pattern="[a-zA-Z0-9]*"/>
+                   pattern="[\-a-zA-Z0-9]*"/>
+        </div>
+        <div class="line">
+            <label for="Listed">List for other CRL users</label>
+            <input id="Listed" name="Listed" type="checkbox" value="true" checked/>
         </div>
         <div class="line">
             <label for="Public">Make public (to the whole world)</label>
@@ -57,6 +62,22 @@
             <a class="edit" href="/_/edit/{{.Short}}">Edit</a>
         </div>
     {{end}}
+</div>
+<div class="box">
+    <p>Recently-listed links:</p>
+    {{ range (.Store.Listed .Ctx 100) }}
+        <div class="link">
+            {{- if .Public -}}
+                <span class="copy" onclick="copyLink(this, 'p/' + '{{.Short}}')">Copy</span>
+                <a class="short" href="/p/{{.Short}}">/p/{{.Short}} (Public)</a>
+            {{- else -}}
+                <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
+                <a class="short" href="/{{.Short}}">{{.Short}}</a>
+            {{- end -}}
+            <span class="url">{{.URL}}</span>
+            <span class="author">({{.Author}})</span>
+        </div>
+    {{ end }}
 </div>
 </body>
 </html>

@@ -48,7 +48,7 @@ import (
 const (
 	applicationJSON = "application/json"
 	contentType     = "Content-Type"
-	textHtml        = "text/html; charset=UTF-8"
+	textHTML        = "text/html; charset=UTF-8"
 )
 
 // Server handles the HTTP API and the UI.
@@ -280,6 +280,7 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 	auth := authFrom(req.Context())
 
 	var payload struct {
+		Listed bool
 		Public bool
 		Short  string
 		URL    string
@@ -293,12 +294,14 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 	}
 
 	if payload.Short == "" {
+		payload.Listed = false
 		payload.Short = hash.Hash(fmt.Sprintf("%s-%d", payload.URL, mathrand.Int()))
 	}
 
 	ctx := req.Context()
 	if l, err := s.store.Publish(ctx, &db.Link{
 		Author: auth,
+		Listed: payload.Listed,
 		Public: payload.Public,
 		Short:  payload.Short,
 		URL:    payload.URL,
@@ -351,42 +354,38 @@ func (s *Server) publish(req *http.Request) *response.Response {
 		return response.Status(http.StatusMethodNotAllowed)
 	}
 
-	var payload struct {
-		OriginalShort string
-		Public        bool
-		Short         string
-		URL           string
-	}
-
 	if err := req.ParseForm(); err != nil {
 		return response.Error(http.StatusBadRequest, errors.Wrap(err, "unable to decode form"))
 	}
-	payload.OriginalShort = req.PostForm.Get("OriginalShort")
-	payload.Public = req.PostForm.Get("Public") == "true"
-	payload.Short = req.PostForm.Get("Short")
-	payload.URL = req.PostForm.Get("URL")
 
-	if payload.Short == "" {
-		payload.Short = hash.Hash(fmt.Sprintf("%s-%d", payload.URL, mathrand.Int()))
+	originalShort := req.PostForm.Get("OriginalShort")
+	link := &db.Link{
+		Author: auth,
+		Listed: req.PostForm.Get("Listed") == "true",
+		Public: req.PostForm.Get("Public") == "true",
+		Short:  req.PostForm.Get("Short"),
+		URL:    req.PostForm.Get("URL"),
+	}
+
+	if link.Short == "" {
+		link.Listed = false
+		link.Short = hash.Hash(fmt.Sprintf("%s-%d", link.URL, mathrand.Int()))
 	}
 
 	ctx, tx, err := s.store.WithTransaction(req.Context())
 	if err != nil {
 		return response.Error(http.StatusInternalServerError, err)
 	}
+	// Rollback is a no-op if already committed.
+	defer tx.Rollback()
 
-	if payload.OriginalShort != payload.Short {
-		if err := s.store.Delete(ctx, payload.OriginalShort, auth); err != nil {
+	if originalShort != link.Short {
+		if err := s.store.Delete(ctx, originalShort, auth); err != nil {
 			return response.Error(http.StatusInternalServerError, err)
 		}
 	}
 
-	if _, err := s.store.Publish(ctx, &db.Link{
-		Author: auth,
-		Public: payload.Public,
-		Short:  payload.Short,
-		URL:    payload.URL,
-	}); err == nil {
+	if _, err := s.store.Publish(ctx, link); err == nil {
 		if err := tx.Commit(); err != nil {
 			return response.Error(http.StatusInternalServerError, err)
 		}
@@ -425,7 +424,7 @@ func (s *Server) edit(req *http.Request) *response.Response {
 	}
 
 	return response.Func(func(w http.ResponseWriter) error {
-		w.Header().Set(contentType, textHtml)
+		w.Header().Set(contentType, textHTML)
 		return tmpl.Execute(w, data)
 	})
 }
@@ -445,7 +444,7 @@ func (s *Server) root(req *http.Request) *response.Response {
 		}
 
 		return response.Func(func(w http.ResponseWriter) error {
-			w.Header().Set(contentType, textHtml)
+			w.Header().Set(contentType, textHTML)
 			return tmpl.Execute(w, data)
 		})
 	}

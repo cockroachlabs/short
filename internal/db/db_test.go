@@ -78,19 +78,28 @@ func TestDB(t *testing.T) {
 
 		l2, err := s.Publish(ctx, &Link{
 			Author: "test",
+			Listed: true,
 			Public: true,
 			Short:  "foobar",
 			URL:    "https://example.com/foobar",
 		})
 		a.NoError(err)
+		a.True(l2.Listed)
 		a.True(l2.Public)
 
 		links, err := s.List(ctx, "test")
 		a.NoError(err)
-		select {
-		case link := <-links:
-			a.Equal(l2, link)
-		}
+		link := <-links
+		a.Equal(l2, link)
+		_, ok := <-links
+		a.False(ok)
+
+		links, err = s.Listed(ctx, 10)
+		a.NoError(err)
+		link = <-links
+		a.Equal(l2, link)
+		_, ok = <-links
+		a.False(ok)
 
 		stats, err := s.Served(ctx)
 		a.Equal(1, stats.Links)

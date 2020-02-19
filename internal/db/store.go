@@ -39,12 +39,13 @@ var (
 CREATE TABLE IF NOT EXISTS links (
   author     STRING      NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  listed     BOOL        NOT NULL DEFAULT false,
   pub        BOOL        NOT NULL DEFAULT false,
   short      STRING      NOT NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   url        STRING      NOT NULL,
-  PRIMARY KEY (short),
-  UNIQUE INDEX (author, short, url) -- Use INSERT ON CONFLICT for updates
+  PRIMARY KEY (short), -- Use INSERT ON CONFLICT for updates
+  INDEX (updated_at DESC, author) -- "Your links" data
 )`, `
 CREATE TABLE IF NOT EXISTS clicks (
   short      STRING      NOT NULL REFERENCES links(short) ON DELETE CASCADE,
@@ -53,7 +54,7 @@ CREATE TABLE IF NOT EXISTS clicks (
 	}
 )
 
-// GlobalStas summarizes the total usage.
+// GlobalStats summarizes the total usage.
 type GlobalStats struct {
 	Clicks int
 	Links  int
@@ -63,13 +64,14 @@ type GlobalStats struct {
 type Store struct {
 	db *sql.DB
 
-	click   *sql.Stmt
-	clicks  *sql.Stmt
-	delete  *sql.Stmt
-	get     *sql.Stmt
-	list    *sql.Stmt
-	publish *sql.Stmt
-	served  *sql.Stmt
+	click   *sql.Stmt // Record a click
+	clicks  *sql.Stmt // Get click count for a link
+	delete  *sql.Stmt // Delete a short link
+	get     *sql.Stmt // Get a short link
+	list    *sql.Stmt // List all links for a user
+	listed  *sql.Stmt // All listed (internally-visible) links
+	publish *sql.Stmt // Insert/update a link
+	served  *sql.Stmt // Global statistics
 }
 
 // New creates a new Store.
@@ -110,7 +112,7 @@ WHERE short = $1 AND author = $2
 	}
 
 	if s.get, err = db.PrepareContext(ctx, `
-SELECT author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE short=$1), short, updated_at, url
+SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$1), listed, pub, short, updated_at, url
 FROM links
 WHERE short=$1
 `); err != nil {
@@ -118,7 +120,7 @@ WHERE short=$1
 	}
 
 	if s.list, err = db.PrepareContext(ctx, `
-SELECT author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), short, updated_at, url
+SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
 FROM links
 WHERE author=$1
 ORDER BY updated_at DESC
@@ -126,12 +128,29 @@ ORDER BY updated_at DESC
 		return nil, err
 	}
 
+	if s.listed, err = db.PrepareContext(ctx, `
+SELECT * FROM
+  (SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
+  FROM links
+  WHERE listed
+  ORDER BY updated_at DESC
+  LIMIT $1)
+ORDER BY short
+`); err != nil {
+		return nil, err
+	}
+
 	if s.publish, err = db.PrepareContext(ctx, `
-INSERT INTO links (author, created_at, pub, short, updated_at, url)
-VALUES ($1, now(), $2, $3, now(), $4)
+INSERT INTO links (author, created_at, listed, pub, short, updated_at, url)
+VALUES ($1, now(), $2, $3, $4, now(), $5)
 ON CONFLICT (short) DO UPDATE
-SET pub = excluded.pub, updated_at = now(), url = excluded.url WHERE links.author = excluded.author
-RETURNING author, created_at, pub, (SELECT COUNT(*) FROM clicks WHERE short=$3), short, updated_at, url
+SET
+  listed = excluded.listed,
+  pub = excluded.pub,
+  updated_at = now(),
+  url = excluded.url
+WHERE links.author = excluded.author
+RETURNING author, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$4), listed, pub, short, updated_at, url
 `); err != nil {
 		return nil, err
 	}
@@ -190,7 +209,12 @@ func (s *Store) List(ctx context.Context, author string) (<-chan *Link, error) {
 
 		for rows.Next() {
 			if link, err := decode(rows); err == nil {
-				links <- link
+				select {
+				case links <- link:
+				case <-ctx.Done():
+					// Interrupted.
+					break
+				}
 			} else {
 				log.Printf("could not decode row for %s: %v", author, err)
 				return
@@ -198,6 +222,41 @@ func (s *Store) List(ctx context.Context, author string) (<-chan *Link, error) {
 		}
 		if err := rows.Err(); err != nil {
 			log.Printf("query failure for %s: %v", author, err)
+		}
+		_ = rows.Close()
+	}()
+
+	return links, nil
+}
+
+// Listed returns CRL-visible links.
+func (s *Store) Listed(ctx context.Context, limit int) (<-chan *Link, error) {
+	links := make(chan *Link, 1)
+
+	go func() {
+		defer close(links)
+
+		rows, err := tx(ctx, s.listed).QueryContext(ctx, limit)
+		if err != nil {
+			log.Printf("listed: %v", err)
+			return
+		}
+
+		for rows.Next() {
+			if link, err := decode(rows); err == nil {
+				select {
+				case links <- link:
+				case <-ctx.Done():
+					// Interrupted.
+					break
+				}
+			} else {
+				log.Printf("listed: could not decode row: %v", err)
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("listed: query failure: %v", err)
 		}
 		_ = rows.Close()
 	}()
@@ -213,7 +272,8 @@ func (s *Store) Ping(ctx context.Context) error {
 // Publish stores or updates the link in the database.  This function
 // returns the latest value in the database.
 func (s *Store) Publish(ctx context.Context, l *Link) (_ *Link, err error) {
-	l, err = decode(tx(ctx, s.publish).QueryRowContext(ctx, l.Author, l.Public, normalize(l.Short), l.URL))
+	l, err = decode(tx(ctx, s.publish).QueryRowContext(
+		ctx, l.Author, l.Listed, l.Public, normalize(l.Short), l.URL))
 	if err != nil {
 		return nil, err
 	} else if l == nil {
@@ -265,13 +325,15 @@ type Tx struct {
 	tx     *sql.Tx
 }
 
-// Commit will commit the underlying database transaction.
+// Commit will commit the underlying database transaction. This method
+// will return an error if the transaction has already been closed.
 func (t *Tx) Commit() error {
 	t.closed = true
 	return t.tx.Commit()
 }
 
-// Rollback will abort the underlying database transaction.
+// Rollback will abort the underlying database transaction. This method
+// is a no-op if the transaction has already been committed.
 func (t *Tx) Rollback() {
 	if t.closed {
 		return
@@ -285,7 +347,9 @@ func decode(data interface {
 }) (*Link, error) {
 	l := &Link{}
 
-	if err := data.Scan(&l.Author, &l.CreatedAt, &l.Public, &l.Count, &l.Short, &l.UpdatedAt, &l.URL); err != nil {
+	if err := data.Scan(
+		&l.Author, &l.CreatedAt, &l.Count, &l.Listed, &l.Public, &l.Short, &l.UpdatedAt, &l.URL,
+	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
