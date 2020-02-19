@@ -49,8 +49,10 @@ CREATE TABLE IF NOT EXISTS links (
 )`, `
 CREATE TABLE IF NOT EXISTS clicks (
   short      STRING      NOT NULL REFERENCES links(short) ON DELETE CASCADE,
-  click_time TIMESTAMPTZ NOT NULL DEFAULT now()
-)`,
+  click_time TIMESTAMPTZ NOT NULL DEFAULT now(),
+  uuid       UUID        NOT NULL DEFAULT gen_random_uuid(),
+  PRIMARY KEY (short, click_time, uuid)
+) INTERLEAVE IN PARENT links(short)`,
 	}
 )
 
