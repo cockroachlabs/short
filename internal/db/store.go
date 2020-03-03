@@ -250,7 +250,7 @@ func (s *Store) Listed(ctx context.Context, limit int) (<-chan *Link, error) {
 				case links <- link:
 				case <-ctx.Done():
 					// Interrupted.
-					break
+					return
 				}
 			} else {
 				log.Printf("listed: could not decode row: %v", err)
