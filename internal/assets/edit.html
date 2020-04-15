@@ -8,7 +8,19 @@
 </head>
 <body>
 <form action="/_/v1/publish" method="post" class="new box">
-    <input type="hidden" name="OriginalShort" value="{{ .Link.Short }}"/>
+    {{ if .EnableForce }}
+        <div class="line">
+            <p>The short URL {{ .Link.Short }} was already registered by
+            {{ .Link.Author }}. Update the vanity link below, or select
+            the hijack option to take ownership.</p>
+        </div>
+        <div class="line">
+            <label for="Force">Hijack existing link</label>
+            <input id="Force" name="Force" type="checkbox" value="true"/>
+        </div>
+    {{ else }}
+        <input type="hidden" name="OriginalShort" value="{{ .Link.Short }}"/>
+    {{ end }}
     <div class="line">
         <label for="URL">URL to link to</label>
         <input id="URL" name="URL" type="url" placeholder="https://example.com/...." required

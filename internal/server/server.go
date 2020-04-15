@@ -280,6 +280,7 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 	auth := authFrom(req.Context())
 
 	var payload struct {
+		Force  bool
 		Listed bool
 		Public bool
 		Short  string
@@ -298,6 +299,11 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 		payload.Short = hash.Hash(fmt.Sprintf("%s-%d", payload.URL, mathrand.Int()))
 	}
 
+	var opts []db.PublishOpt
+	if payload.Force {
+		opts = []db.PublishOpt{db.AllowNewAuthor}
+	}
+
 	ctx := req.Context()
 	if l, err := s.store.Publish(ctx, &db.Link{
 		Author: auth,
@@ -305,7 +311,7 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 		Public: payload.Public,
 		Short:  payload.Short,
 		URL:    payload.URL,
-	}); err == nil {
+	}, opts...); err == nil {
 		return response.JSON(http.StatusCreated, l)
 	} else if test := db.ValidationError(""); errors.As(err, &test) {
 		return response.Error(http.StatusBadRequest, test)
@@ -372,6 +378,11 @@ func (s *Server) publish(req *http.Request) *response.Response {
 		link.Short = hash.Hash(fmt.Sprintf("%s-%d", link.URL, mathrand.Int()))
 	}
 
+	var opts []db.PublishOpt
+	if req.PostForm.Get("Force") == "true" {
+		opts = []db.PublishOpt{db.AllowNewAuthor}
+	}
+
 	ctx, tx, err := s.store.WithTransaction(req.Context())
 	if err != nil {
 		return response.Error(http.StatusInternalServerError, err)
@@ -385,7 +396,7 @@ func (s *Server) publish(req *http.Request) *response.Response {
 		}
 	}
 
-	if _, err := s.store.Publish(ctx, link); err == nil {
+	if _, err := s.store.Publish(ctx, link, opts...); err == nil {
 		if err := tx.Commit(); err != nil {
 			return response.Error(http.StatusInternalServerError, err)
 		}
@@ -393,7 +404,23 @@ func (s *Server) publish(req *http.Request) *response.Response {
 	} else if test := db.ValidationError(""); errors.As(err, &test) {
 		return response.Error(http.StatusBadRequest, test)
 	} else if test := db.ErrShortConflict; errors.As(err, &test) {
-		return response.Error(http.StatusBadRequest, test)
+		// If the link conflicts with an existing link owned by another
+		// user, provide an option to hijack.
+		tmpl, err := s.template("edit.html")
+		if err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
+		data := &templateData{
+			Ctx:         ctx,
+			EnableForce: true,
+			Link:        link,
+			Store:       s.store,
+			User:        authFrom(ctx),
+		}
+		return response.Func(func(w http.ResponseWriter) error {
+			w.Header().Set(contentType, textHTML)
+			return tmpl.Execute(w, data)
+		})
 	} else {
 		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "unable to store data"))
 	}

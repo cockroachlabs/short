@@ -62,6 +62,15 @@ type GlobalStats struct {
 	Links  int
 }
 
+// PublishOpt can be passed to Store.Publish to alter the default behaviors.
+type PublishOpt int
+
+const (
+	// AllowNewAuthor instructs Store.Publish to allow a link to be
+	// taken over by an author other than the one that created it.
+	AllowNewAuthor PublishOpt = iota
+)
+
 // Store provides access to the short-link data.
 type Store struct {
 	db *sql.DB
@@ -147,11 +156,12 @@ INSERT INTO links (author, created_at, listed, pub, short, updated_at, url)
 VALUES ($1, now(), $2, $3, $4, now(), $5)
 ON CONFLICT (short) DO UPDATE
 SET
+  author = excluded.author,
   listed = excluded.listed,
   pub = excluded.pub,
   updated_at = now(),
   url = excluded.url
-WHERE links.author = excluded.author
+WHERE (links.author = excluded.author) OR $6 -- Allow "force-pushing" a link
 RETURNING author, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$4), listed, pub, short, updated_at, url
 `); err != nil {
 		return nil, err
@@ -273,9 +283,17 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Publish stores or updates the link in the database.  This function
 // returns the latest value in the database.
-func (s *Store) Publish(ctx context.Context, l *Link) (_ *Link, err error) {
+func (s *Store) Publish(ctx context.Context, l *Link, opts ...PublishOpt) (_ *Link, err error) {
+	var force bool
+	for _, opt := range opts {
+		switch opt {
+		case AllowNewAuthor:
+			force = true
+		}
+	}
+
 	l, err = decode(tx(ctx, s.publish).QueryRowContext(
-		ctx, l.Author, l.Listed, l.Public, normalize(l.Short), l.URL))
+		ctx, l.Author, l.Listed, l.Public, normalize(l.Short), l.URL, force))
 	if err != nil {
 		return nil, err
 	} else if l == nil {

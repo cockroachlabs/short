@@ -64,7 +64,9 @@ func TestDB(t *testing.T) {
 			Short:  "foobar",
 			URL:    "https://example.com/foobar",
 		})
-		a.NoError(err)
+		if !a.NoError(err) {
+			return
+		}
 		a.False(l1.Public)
 		a.Equal(l1.CreatedAt, l1.UpdatedAt)
 
@@ -83,7 +85,9 @@ func TestDB(t *testing.T) {
 			Short:  "foobar",
 			URL:    "https://example.com/foobar",
 		})
-		a.NoError(err)
+		if !a.NoError(err) {
+			return
+		}
 		a.True(l2.Listed)
 		a.True(l2.Public)
 
@@ -188,4 +192,13 @@ func TestNoDuplicates(t *testing.T) {
 	})
 	a.Equal(ErrShortConflict, err)
 	a.Nil(l3)
+
+	l4, err := s.Publish(context.Background(), &Link{
+		Author: "other",
+		Public: true,
+		Short:  "foobar",
+		URL:    "https://example.com/foobar",
+	}, AllowNewAuthor)
+	a.NoError(err)
+	a.Equal("other", l4.Author)
 }

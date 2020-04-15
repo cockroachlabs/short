@@ -31,6 +31,8 @@ type cachedTemplate struct {
 
 type templateData struct {
 	Ctx context.Context
+	// Show additional UI allowing the user to hijack a link.
+	EnableForce bool
 	// Link will be present for editing flow.
 	Link  *db.Link
 	Store *db.Store
