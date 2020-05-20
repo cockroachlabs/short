@@ -50,7 +50,7 @@ form.new div.line {
     margin-block-start: 0.5ex;
 }
 
-input[type=text], input[type=url] {
+input {
     flex-grow: 1;
 }
 

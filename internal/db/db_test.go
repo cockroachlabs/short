@@ -56,13 +56,29 @@ func TestDB(t *testing.T) {
 		return
 	}
 
+	var eTag ETag
+	checkETag := func(t *testing.T) {
+		t.Helper()
+		t.Run("etag", func(t *testing.T) {
+			a := assert.New(t)
+			tag, err := s.ETag(ctx)
+			a.NoError(err)
+			a.NotEqual(eTag, tag)
+			eTag = tag
+		})
+	}
+
+	checkETag(t)
+	assert.Equal(t, EmptyETag, eTag)
+
 	t.Run("create link", func(t *testing.T) {
 		a := assert.New(t)
 		l1, err := s.Publish(ctx, &Link{
-			Author: "test",
-			Public: false,
-			Short:  "foobar",
-			URL:    "https://example.com/foobar",
+			Author:  "test",
+			Comment: "Hello World!",
+			Public:  false,
+			Short:   "foobar",
+			URL:     "https://example.com/foobar",
 		})
 		if !a.NoError(err) {
 			return
@@ -74,6 +90,7 @@ func TestDB(t *testing.T) {
 		a.NoError(err)
 		a.Equal(l1, found)
 	})
+	checkETag(t)
 
 	t.Run("check updating", func(t *testing.T) {
 		a := assert.New(t)
@@ -109,6 +126,7 @@ func TestDB(t *testing.T) {
 		a.Equal(1, stats.Links)
 		a.NoError(err)
 	})
+	checkETag(t)
 
 	t.Run("check short aliases", func(t *testing.T) {
 		a := assert.New(t)
@@ -152,6 +170,22 @@ func TestDB(t *testing.T) {
 		a.NoError(err)
 	})
 
+	t.Run("list all", func(t *testing.T) {
+		a := assert.New(t)
+
+		ch, err := s.ListAll(ctx)
+		if !a.NoError(err) {
+			return
+		}
+
+		count := 0
+		for range ch {
+			count++
+		}
+		a.Equal(2, count)
+	})
+	checkETag(t)
+
 	t.Run("delete", func(t *testing.T) {
 		a := assert.New(t)
 
@@ -162,6 +196,7 @@ func TestDB(t *testing.T) {
 		a.Equal(0, stats.Clicks)
 		a.NoError(err)
 	})
+	checkETag(t)
 
 	assert.NoError(t, tx.Commit())
 }

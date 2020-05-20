@@ -16,8 +16,11 @@ package server
 
 import (
 	"context"
-	"log"
 	"net/http"
+
+	"runtime/pprof"
+
+	"log"
 
 	"github.com/cockroachlabs/short/internal/server/response"
 )
@@ -44,26 +47,54 @@ const (
 	authPublic
 )
 
-func (s *Server) handler(authLevel authLevel, fn func(req *http.Request) *response.Response) http.HandlerFunc {
+type canonicity int
+
+const (
+	// If the hostname associated with the incoming request does not match
+	// Server.canonicalHost, introduce a redirect before proceeding.
+	canonical canonicity = iota
+	// Process the request, regardless of the hostname used.
+	anyHost
+)
+
+func (s *Server) handler(
+	authLevel authLevel, canon canonicity, fn func(req *http.Request) *response.Response,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
-		var resp *response.Response
+		labels := pprof.Labels("http-path", req.URL.Path)
+		pprof.Do(req.Context(), labels, func(ctx context.Context) {
+			var resp *response.Response
+			defer func() {
+				if err := resp.Write(w); err != nil {
+					log.Printf("could not write response: %v", err)
+				}
+			}()
 
-		switch authLevel {
-		case authRequired, authOptional:
-			if auth, ok := s.extractEmail(req); ok {
-				req = req.WithContext(context.WithValue(req.Context(), authUser, auth))
-			} else if authLevel == authRequired {
-				resp = response.Status(http.StatusUnauthorized)
+			// Canonicalize the incoming hostname.
+			if canon == canonical && s.canonicalHost != "" && req.Host != s.canonicalHost {
+				req.URL.Host = s.canonicalHost
+				if s.httpOnly {
+					req.URL.Scheme = "http"
+				} else {
+					req.URL.Scheme = "https"
+				}
+				resp = response.Redirect(http.StatusPermanentRedirect, req.URL.String())
+				return
 			}
-		case authPublic:
-			// No-op.
-		}
 
-		if resp == nil {
+			switch authLevel {
+			case authPublic:
+				// No-op.
+			case authRequired, authOptional:
+				if auth, ok := s.extractEmail(req); ok {
+					req = req.WithContext(context.WithValue(ctx, authUser, auth))
+				} else if authLevel == authRequired {
+					resp = response.Status(http.StatusUnauthorized)
+					return
+				}
+			}
+
 			resp = fn(req)
-		}
-		if err := resp.Write(w); err != nil {
-			log.Printf("could not send response: %v", err)
-		}
+		})
 	}
 }

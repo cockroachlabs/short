@@ -29,6 +29,8 @@ spec:
             - 0.0.0.0:8443
             - -c
             - $(connstring)
+            - --canonicalHost
+            - go.crdb.dev
           env:
             - name: connstring
               valueFrom:

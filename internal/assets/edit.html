@@ -33,6 +33,11 @@
                pattern="[\-a-zA-Z0-9]*" value="{{ .Link.Short }}"/>
     </div>
     <div class="line">
+        <label for="Comment">Comment </label>
+        <input id="Comment" name="Comment" type="text" placeholder="Optional comment"
+               value="{{ .Link.Comment }}"/>
+    </div>
+    <div class="line">
         <label for="Listed">List for other CRL users</label>
         {{ if .Link.Listed }}
             <input id="Listed" name="Listed" type="checkbox" value="true" checked/>

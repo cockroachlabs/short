@@ -26,6 +26,7 @@ import (
 type Link struct {
 	Author    string    // Only the owner can update
 	CreatedAt time.Time // Creation time
+	Comment   string    // A user-defined comment
 	Count     int       // Number of times clicked
 	Listed    bool      // Appears on the front page
 	Public    bool      // Accessible from outside
@@ -42,7 +43,7 @@ func (l *Link) Validate() error {
 	if l.CreatedAt.IsZero() {
 		return ValidationError("no CreatedAt")
 	}
-	if len(l.Short) < 3 {
+	if len(l.Short) < 2 {
 		return ValidationError("no Short or too short")
 	}
 	for test := l.Short; test != ""; {

@@ -39,6 +39,7 @@ var (
 CREATE TABLE IF NOT EXISTS links (
   author     STRING      NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  comment    STRING      NOT NULL DEFAULT '',
   listed     BOOL        NOT NULL DEFAULT false,
   pub        BOOL        NOT NULL DEFAULT false,
   short      STRING      NOT NULL,
@@ -55,6 +56,12 @@ CREATE TABLE IF NOT EXISTS clicks (
 ) INTERLEAVE IN PARENT links(short)`,
 	}
 )
+
+// ETag is an opaque value used to track changes in the links table.
+type ETag string
+
+// EmptyETag will be returned when there is no link data.
+const EmptyETag ETag = "<<empty>>"
 
 // GlobalStats summarizes the total usage.
 type GlobalStats struct {
@@ -79,7 +86,9 @@ type Store struct {
 	clicks  *sql.Stmt // Get click count for a link
 	delete  *sql.Stmt // Delete a short link
 	get     *sql.Stmt // Get a short link
+	etag    *sql.Stmt // A modification marker for the links table
 	list    *sql.Stmt // List all links for a user
+	listAll *sql.Stmt // List all links, unordered
 	listed  *sql.Stmt // All listed (internally-visible) links
 	publish *sql.Stmt // Insert/update a link
 	served  *sql.Stmt // Global statistics
@@ -122,8 +131,14 @@ WHERE short = $1 AND author = $2
 		return nil, err
 	}
 
+	if s.etag, err = db.PrepareContext(ctx, `
+SHOW EXPERIMENTAL_FINGERPRINTS FROM TABLE links
+`); err != nil {
+		return nil, err
+	}
+
 	if s.get, err = db.PrepareContext(ctx, `
-SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$1), listed, pub, short, updated_at, url
+SELECT author, comment, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$1), listed, pub, short, updated_at, url
 FROM links
 WHERE short=$1
 `); err != nil {
@@ -131,7 +146,7 @@ WHERE short=$1
 	}
 
 	if s.list, err = db.PrepareContext(ctx, `
-SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
+SELECT author, comment, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
 FROM links
 WHERE author=$1
 ORDER BY updated_at DESC
@@ -139,9 +154,16 @@ ORDER BY updated_at DESC
 		return nil, err
 	}
 
+	if s.listAll, err = db.PrepareContext(ctx, `
+SELECT author, comment, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
+FROM links
+`); err != nil {
+		return nil, err
+	}
+
 	if s.listed, err = db.PrepareContext(ctx, `
 SELECT * FROM
-  (SELECT author, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
+  (SELECT author, comment, created_at, (SELECT COUNT(*) FROM clicks WHERE clicks.short=links.short), listed, pub, short, updated_at, url
   FROM links
   WHERE listed
   ORDER BY updated_at DESC
@@ -152,17 +174,18 @@ ORDER BY short
 	}
 
 	if s.publish, err = db.PrepareContext(ctx, `
-INSERT INTO links (author, created_at, listed, pub, short, updated_at, url)
-VALUES ($1, now(), $2, $3, $4, now(), $5)
+INSERT INTO links (author, comment, created_at, listed, pub, short, updated_at, url)
+VALUES ($1, $2, now(), $3, $4, $5, now(), $6)
 ON CONFLICT (short) DO UPDATE
 SET
   author = excluded.author,
+  comment = excluded.comment,
   listed = excluded.listed,
   pub = excluded.pub,
   updated_at = now(),
   url = excluded.url
-WHERE (links.author = excluded.author) OR $6 -- Allow "force-pushing" a link
-RETURNING author, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$4), listed, pub, short, updated_at, url
+WHERE (links.author = excluded.author) OR $7 -- Allow "force-pushing" a link
+RETURNING author, comment, created_at, (SELECT COUNT(*) FROM clicks WHERE short=$5), listed, pub, short, updated_at, url
 `); err != nil {
 		return nil, err
 	}
@@ -206,6 +229,29 @@ func (s *Store) Get(ctx context.Context, short string) (*Link, error) {
 	return decode(tx(ctx, s.get).QueryRowContext(ctx, normalize(short)))
 }
 
+// ETag returns a last-modified value for the collection of links.
+func (s *Store) ETag(ctx context.Context) (ETag, error) {
+	rows, err := tx(ctx, s.etag).QueryContext(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		var hash *string
+		if err := rows.Scan(&name, &hash); err != nil {
+			return "", err
+		}
+		if name == "primary" {
+			if hash == nil {
+				return EmptyETag, nil
+			}
+			return ETag(*hash), nil
+		}
+	}
+	return "", errors.New("no primary key fingerprint")
+}
+
 // List returns the Links that were created by the given author.
 func (s *Store) List(ctx context.Context, author string) (<-chan *Link, error) {
 	links := make(chan *Link, 1)
@@ -234,6 +280,41 @@ func (s *Store) List(ctx context.Context, author string) (<-chan *Link, error) {
 		}
 		if err := rows.Err(); err != nil {
 			log.Printf("query failure for %s: %v", author, err)
+		}
+		_ = rows.Close()
+	}()
+
+	return links, nil
+}
+
+// ListAll returns all Links in the database.
+func (s *Store) ListAll(ctx context.Context) (<-chan *Link, error) {
+	links := make(chan *Link, 1)
+
+	go func() {
+		defer close(links)
+
+		rows, err := tx(ctx, s.listAll).QueryContext(ctx)
+		if err != nil {
+			log.Printf("listing all links: %v", err)
+			return
+		}
+
+		for rows.Next() {
+			if link, err := decode(rows); err == nil {
+				select {
+				case links <- link:
+				case <-ctx.Done():
+					// Interrupted.
+					break
+				}
+			} else {
+				log.Printf("could not decode link row: %v", err)
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("query failure for all links: %v", err)
 		}
 		_ = rows.Close()
 	}()
@@ -293,7 +374,7 @@ func (s *Store) Publish(ctx context.Context, l *Link, opts ...PublishOpt) (_ *Li
 	}
 
 	l, err = decode(tx(ctx, s.publish).QueryRowContext(
-		ctx, l.Author, l.Listed, l.Public, normalize(l.Short), l.URL, force))
+		ctx, l.Author, l.Comment, l.Listed, l.Public, normalize(l.Short), l.URL, force))
 	if err != nil {
 		return nil, err
 	} else if l == nil {
@@ -368,7 +449,7 @@ func decode(data interface {
 	l := &Link{}
 
 	if err := data.Scan(
-		&l.Author, &l.CreatedAt, &l.Count, &l.Listed, &l.Public, &l.Short, &l.UpdatedAt, &l.URL,
+		&l.Author, &l.Comment, &l.CreatedAt, &l.Count, &l.Listed, &l.Public, &l.Short, &l.UpdatedAt, &l.URL,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil

@@ -19,7 +19,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rand"
+	cryptoRand "crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -30,16 +30,17 @@ import (
 	"math/big"
 	mathrand "math/rand"
 	"net/http"
-	"strings"
-	"time"
-
+	httpPprof "net/http/pprof"
 	"path"
-
+	"runtime/pprof"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/cockroachlabs/short/internal/assets"
 	"github.com/cockroachlabs/short/internal/db"
 	"github.com/cockroachlabs/short/internal/hash"
+	"github.com/cockroachlabs/short/internal/mapper"
 	"github.com/cockroachlabs/short/internal/server/response"
 	"github.com/pkg/errors"
 	"github.com/spf13/pflag"
@@ -53,12 +54,17 @@ const (
 
 // Server handles the HTTP API and the UI.
 type Server struct {
-	bind      string
-	conn      string
-	fallback  string
-	forceUser string
-	httpOnly  bool
-	store     *db.Store
+	bind          string        // The bind string for the server socket.
+	canonicalHost string        // Redirect all incoming requests to have this hostname.
+	conn          string        // DB connection string.
+	etag          db.ETag       // Tracks modifications to the link table.
+	fallback      string        // The URL to redirect to on a 404.
+	forceUser     string        // For local testing, overrides the IAP user id.
+	httpOnly      bool          // For local testing, use an HTTP listener.
+	refresh       time.Duration // Time between refreshing internal state.
+
+	mapper *mapper.Mapper
+	store  *db.Store
 
 	mu struct {
 		sync.Mutex
@@ -68,14 +74,18 @@ type Server struct {
 
 // New constructs a Server that will be configured by the flag set.
 func New(flags *pflag.FlagSet) *Server {
-	s := &Server{}
+	s := &Server{
+		mapper: mapper.New(),
+	}
 	s.mu.templates = make(map[string]*cachedTemplate)
 	flags.StringVar(&assets.AssetPath, "assetPath", "", "for development use")
 	flags.StringVarP(&s.bind, "bind", "b", ":443", "the address to bind to")
+	flags.StringVar(&s.canonicalHost, "canonicalHost", "", "add intermediate redirect to this hostname")
 	flags.StringVarP(&s.conn, "conn", "c", "", "the database connection string")
-	flags.BoolVar(&s.httpOnly, "httpOnly", false, "bind HTTP instead of HTTPS")
 	flags.StringVar(&s.fallback, "fallback", "https://cockroachlabs.com", "the URL to send if not found")
 	flags.StringVar(&s.forceUser, "forceUser", "", "for debugging use only")
+	flags.BoolVar(&s.httpOnly, "httpOnly", false, "bind HTTP instead of HTTPS")
+	flags.DurationVar(&s.refresh, "refresh", time.Second, "time between refreshing link data")
 	return s
 }
 
@@ -90,14 +100,33 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	// Ensure that we can load the initial dataset, then start a
+	// goroutine to refresh.
+	if err := s.refreshMapper(ctx); err != nil {
+		return errors.Wrap(err, "could not load link data")
+	}
+	go pprof.Do(ctx, pprof.Labels("name", "link refresh loop"), func(ctx context.Context) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.NewTimer(s.refresh).C:
+				if err := s.refreshMapper(ctx); err != nil {
+					log.Printf("unable to refresh link data: %v", err)
+				}
+			}
+		}
+	})
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/_/asset/", s.handler(authRequired, s.asset))
-	mux.HandleFunc("/_/edit/", s.handler(authRequired, s.edit))
-	mux.HandleFunc("/_/healthz", s.handler(authPublic, s.healthz))
-	mux.HandleFunc("/_/v1/link/", s.handler(authRequired, s.crud))
-	mux.HandleFunc("/_/v1/publish", s.handler(authRequired, s.publish))
-	mux.HandleFunc("/p/", s.handler(authPublic, s.public))
-	mux.HandleFunc("/", s.handler(authRequired, s.root))
+	mux.HandleFunc("/_/asset/", s.handler(authRequired, canonical, s.asset))
+	mux.HandleFunc("/_/debug/pprof/", s.handler(authRequired, anyHost, s.pprof))
+	mux.HandleFunc("/_/edit/", s.handler(authRequired, canonical, s.edit))
+	mux.HandleFunc("/_/healthz", s.handler(authPublic, anyHost, s.healthz))
+	mux.HandleFunc("/_/v1/link/", s.handler(authRequired, canonical, s.crud))
+	mux.HandleFunc("/_/v1/publish", s.handler(authRequired, canonical, s.publish))
+	mux.HandleFunc("/p/", s.handler(authPublic, canonical, s.public))
+	mux.HandleFunc("/", s.handler(authOptional, canonical, s.root))
 
 	server := http.Server{
 		Addr:    s.bind,
@@ -107,7 +136,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	if !s.httpOnly {
 		// Loosely based on https://golang.org/src/crypto/tls/generate_cert.go
-		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), cryptoRand.Reader)
 		if err != nil {
 			return errors.Wrap(err, "failed to generate private key")
 		}
@@ -115,7 +144,7 @@ func (s *Server) Run(ctx context.Context) error {
 		now := time.Now().UTC()
 
 		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+		serialNumber, err := cryptoRand.Int(cryptoRand.Reader, serialNumberLimit)
 		if err != nil {
 			return errors.Wrap(err, "failed to generate serial number")
 		}
@@ -133,7 +162,7 @@ func (s *Server) Run(ctx context.Context) error {
 			},
 		}
 
-		certBytes, err := x509.CreateCertificate(rand.Reader, &cert, &cert, &priv.PublicKey, priv)
+		certBytes, err := x509.CreateCertificate(cryptoRand.Reader, &cert, &cert, &priv.PublicKey, priv)
 		if err != nil {
 			return errors.Wrap(err, "failed to generate certificate")
 		}
@@ -280,11 +309,12 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 	auth := authFrom(req.Context())
 
 	var payload struct {
-		Force  bool
-		Listed bool
-		Public bool
-		Short  string
-		URL    string
+		Comment string
+		Force   bool
+		Listed  bool
+		Public  bool
+		Short   string
+		URL     string
 	}
 
 	if req.Header.Get(contentType) != applicationJSON {
@@ -306,11 +336,12 @@ func (s *Server) crudPost(req *http.Request) *response.Response {
 
 	ctx := req.Context()
 	if l, err := s.store.Publish(ctx, &db.Link{
-		Author: auth,
-		Listed: payload.Listed,
-		Public: payload.Public,
-		Short:  payload.Short,
-		URL:    payload.URL,
+		Author:  auth,
+		Comment: payload.Comment,
+		Listed:  payload.Listed,
+		Public:  payload.Public,
+		Short:   payload.Short,
+		URL:     payload.URL,
 	}, opts...); err == nil {
 		return response.JSON(http.StatusCreated, l)
 	} else if test := db.ValidationError(""); errors.As(err, &test) {
@@ -335,12 +366,11 @@ func (s *Server) healthz(req *http.Request) *response.Response {
 
 // public serves only public links at the /p/ prefix.
 func (s *Server) public(req *http.Request) *response.Response {
-	l, err := s.store.Get(req.Context(), req.URL.Path[3:])
-	if err != nil {
-		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "get"))
-	}
+	// Trim the leading /p prefix.
+	req.URL.Path = req.URL.Path[2:]
+	l, ok := s.mapper.Get(req.URL)
 
-	if l == nil || !l.Public {
+	if !ok || l == nil || !l.Public {
 		l = &db.Link{URL: s.fallback}
 	} else {
 		// Don't hold up caller for our metrics.
@@ -366,11 +396,12 @@ func (s *Server) publish(req *http.Request) *response.Response {
 
 	originalShort := req.PostForm.Get("OriginalShort")
 	link := &db.Link{
-		Author: auth,
-		Listed: req.PostForm.Get("Listed") == "true",
-		Public: req.PostForm.Get("Public") == "true",
-		Short:  req.PostForm.Get("Short"),
-		URL:    req.PostForm.Get("URL"),
+		Author:  auth,
+		Comment: req.PostForm.Get("Comment"),
+		Listed:  req.PostForm.Get("Listed") == "true",
+		Public:  req.PostForm.Get("Public") == "true",
+		Short:   req.PostForm.Get("Short"),
+		URL:     req.PostForm.Get("URL"),
 	}
 
 	if link.Short == "" {
@@ -400,7 +431,7 @@ func (s *Server) publish(req *http.Request) *response.Response {
 		if err := tx.Commit(); err != nil {
 			return response.Error(http.StatusInternalServerError, err)
 		}
-		return response.Redirect(http.StatusTemporaryRedirect, "/")
+		return response.Redirect(http.StatusFound, "/")
 	} else if test := db.ValidationError(""); errors.As(err, &test) {
 		return response.Error(http.StatusBadRequest, test)
 	} else if test := db.ErrShortConflict; errors.As(err, &test) {
@@ -456,8 +487,53 @@ func (s *Server) edit(req *http.Request) *response.Response {
 	})
 }
 
+func (s *Server) pprof(request *http.Request) *response.Response {
+	return response.Func(func(writer http.ResponseWriter) error {
+		request.URL.Path = request.URL.Path[2:]
+		_, file := path.Split(request.URL.Path)
+		switch file {
+		case "cmdline":
+			httpPprof.Cmdline(writer, request)
+		case "profile":
+			httpPprof.Profile(writer, request)
+		case "symbol":
+			httpPprof.Symbol(writer, request)
+		case "trace":
+			httpPprof.Trace(writer, request)
+		default:
+			httpPprof.Index(writer, request)
+		}
+		return nil
+	})
+}
+
+func (s *Server) refreshMapper(ctx context.Context) error {
+	tag, err := s.store.ETag(ctx)
+	if err != nil {
+		return err
+	}
+	if s.etag == tag {
+		return nil
+	}
+	ch, err := s.store.ListAll(ctx)
+	if err != nil {
+		return err
+	}
+	var links []*db.Link
+	for l := range ch {
+		links = append(links, l)
+	}
+	s.mapper.SetLinks(links)
+	s.etag = tag
+	return nil
+}
+
 func (s *Server) root(req *http.Request) *response.Response {
-	if req.URL.Path == "/" {
+	// This has only optional auth required, to allow high-value, public patterns to bypass IAP.
+	user := authFrom(req.Context())
+
+	// Only serve the "real" root page if the user is logged in
+	if req.URL.Path == "/" && user != "" {
 		ctx := req.Context()
 		tmpl, err := s.template("landing.html")
 		if err != nil {
@@ -476,12 +552,9 @@ func (s *Server) root(req *http.Request) *response.Response {
 		})
 	}
 
-	l, err := s.store.Get(req.Context(), req.URL.Path[1:])
-	if err != nil {
-		return response.Error(http.StatusInternalServerError, errors.Wrap(err, "get"))
-	}
+	l, ok := s.mapper.Get(req.URL)
 
-	if l == nil {
+	if !ok || l == nil || (user == "" && !l.Public) {
 		l = &db.Link{URL: s.fallback}
 	} else {
 		// Don't hold up caller for our metrics.

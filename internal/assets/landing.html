@@ -17,7 +17,9 @@
     </script>
 </head>
 <body>
-<a style="float: right" href="https://github.com/cockroachlabs/short">Patches welcome!</a>
+<span style="float:right">
+<a href="https://github.com/cockroachlabs/short/issues/new">Bugs?</a>
+</span>
 <img src="/_/asset/wordmark.svg" height="48px"/>
 {{- $stats := .Store.Served .Ctx -}}
 <p>Welcome {{.User}}! This is a link-shortening service running on a Cockroach Cloud
@@ -37,6 +39,11 @@
                    pattern="[\-a-zA-Z0-9]*"/>
         </div>
         <div class="line">
+            <label for="Comment">Comment (optional)</label>
+            <input id="Comment" name="Comment" type="text"
+                   placeholder="Marketing Campaign 2020Q5"/>
+        </div>
+        <div class="line">
             <label for="Listed">List for other CRL users</label>
             <input id="Listed" name="Listed" type="checkbox" value="true" checked/>
         </div>
@@ -46,6 +53,31 @@
             <input type="submit" value="Go!"/>
         </div>
     </form>
+</div>
+<div class="box">
+    <p>Totally Non-Obvious Features!</p>
+    <ul>
+        <li>If you don't specify a vanity link, an automatic value will
+            be chosen. This is useful for when you just want to turn a link
+            to a dashboard report into something that won't get mangled by
+            email clients, etc.
+        </li>
+        <li>If you specify a vanity link that's already in use, you'll
+            be given the option on the next page to hijack the existing
+            link.
+        </li>
+        <li>The redirection URL supports substitution patterns! You can
+            use positional arguments like <code>$(1)</code> or query
+            parameters like <code>$(someParam)</code> to rewrite the
+            redirect URL. For example:
+            <ul>
+                <li>Redirect URL: <code>https://example.com/elsewhere/$(2)/$(1)/$(0)</code></li>
+                <li>Vanity link: <code>vanity</code></li>
+                <li><code>go/vanity/X/Y &#x2192; https://example.com/elsewhere/Y/X/vanity</code>
+                </li>
+            </ul>
+        </li>
+    </ul>
 </div>
 <div class="box">
     <p>Your links:</p>
@@ -58,7 +90,7 @@
                 <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
                 <a class="short" href="/{{.Short}}">{{.Short}}</a>
             {{- end -}}
-            <span class="url">{{.URL}}</span>
+            <span class="url" title="{{.URL}}">{{or .Comment .URL}}</span>
             <span class="count">{{.Count}} Clicks</span>
             <a class="edit" href="/_/edit/{{.Short}}">Edit</a>
         </div>
@@ -75,7 +107,7 @@
                 <span class="copy" onclick="copyLink(this, '{{.Short}}')">Copy</span>
                 <a class="short" href="/{{.Short}}">{{.Short}}</a>
             {{- end -}}
-            <span class="url">{{.URL}}</span>
+            <span class="url" title="{{.URL}}">{{or .Comment .URL}}</span>
             <span class="author">({{.Author}})</span>
         </div>
     {{ end }}
