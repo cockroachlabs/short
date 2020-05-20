@@ -15,12 +15,19 @@
 package db
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 )
+
+// A Click is generated whenever we redirect a caller.
+type Click struct {
+	Link    *Link
+	Request *http.Request
+}
 
 // Link is a shortened link.
 type Link struct {

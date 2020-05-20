@@ -54,14 +54,15 @@ const (
 
 // Server handles the HTTP API and the UI.
 type Server struct {
-	bind          string        // The bind string for the server socket.
-	canonicalHost string        // Redirect all incoming requests to have this hostname.
-	conn          string        // DB connection string.
-	etag          db.ETag       // Tracks modifications to the link table.
-	fallback      string        // The URL to redirect to on a 404.
-	forceUser     string        // For local testing, overrides the IAP user id.
-	httpOnly      bool          // For local testing, use an HTTP listener.
-	refresh       time.Duration // Time between refreshing internal state.
+	bind          string           // The bind string for the server socket.
+	canonicalHost string           // Redirect all incoming requests to have this hostname.
+	clicks        chan<- *db.Click // Closed after server shutdown.
+	conn          string           // DB connection string.
+	etag          db.ETag          // Tracks modifications to the link table.
+	fallback      string           // The URL to redirect to on a 404.
+	forceUser     string           // For local testing, overrides the IAP user id.
+	httpOnly      bool             // For local testing, use an HTTP listener.
+	refresh       time.Duration    // Time between refreshing internal state.
 
 	mapper *mapper.Mapper
 	store  *db.Store
@@ -118,6 +119,18 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 	})
 
+	// Save clicks into the database.
+	clicks := make(chan *db.Click, 1024)
+	defer close(clicks)
+	s.clicks = clicks
+	go pprof.Do(context.Background(), pprof.Labels("name", "click recorder"), func(ctx context.Context) {
+		for click := range clicks {
+			if err := s.store.Click(context.Background(), click); err != nil {
+				log.Printf("dropped click for %s: %v", click.Link.Short, err)
+			}
+		}
+	})
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/_/asset/", s.handler(authRequired, canonical, s.asset))
 	mux.HandleFunc("/_/debug/pprof/", s.handler(authRequired, anyHost, s.pprof))
@@ -128,11 +141,11 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/p/", s.handler(authPublic, canonical, s.public))
 	mux.HandleFunc("/", s.handler(authOptional, canonical, s.root))
 
-	server := http.Server{
+	httpServer := http.Server{
 		Addr:    s.bind,
 		Handler: mux,
 	}
-	listen := server.ListenAndServe
+	listen := httpServer.ListenAndServe
 
 	if !s.httpOnly {
 		// Loosely based on https://golang.org/src/crypto/tls/generate_cert.go
@@ -167,25 +180,25 @@ func (s *Server) Run(ctx context.Context) error {
 			return errors.Wrap(err, "failed to generate certificate")
 		}
 
-		server.TLSConfig = &tls.Config{
+		httpServer.TLSConfig = &tls.Config{
 			Certificates: []tls.Certificate{{
 				Certificate: [][]byte{certBytes},
 				PrivateKey:  priv,
 			}}}
 		listen = func() error {
-			return server.ListenAndServeTLS("" /* certfile */, "" /* keyfile */)
+			return httpServer.ListenAndServeTLS("" /* certfile */, "" /* keyfile */)
 		}
 	}
 
 	go func() {
 		<-ctx.Done()
 		grace, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		if err := server.Shutdown(grace); err != nil {
+		if err := httpServer.Shutdown(grace); err != nil {
 			log.Printf("could not stop server: %v", err)
 		}
 		cancel()
 	}()
-	log.Printf("listening on %s", server.Addr)
+	log.Printf("listening on %s", httpServer.Addr)
 
 	if err := listen(); err != nil && err != http.ErrServerClosed {
 		return errors.Wrap(err, "failed to start server")
@@ -373,12 +386,7 @@ func (s *Server) public(req *http.Request) *response.Response {
 	if !ok || l == nil || !l.Public {
 		l = &db.Link{URL: s.fallback}
 	} else {
-		// Don't hold up caller for our metrics.
-		go func() {
-			if err := s.store.Click(context.Background(), l.Short); err != nil {
-				log.Printf("dropped click for %s: %v", l.Short, err)
-			}
-		}()
+		s.recordClick(l, req)
 	}
 
 	return response.Redirect(http.StatusTemporaryRedirect, l.URL)
@@ -507,6 +515,16 @@ func (s *Server) pprof(request *http.Request) *response.Response {
 	})
 }
 
+// Add a click to the record queue in a non-blocking fashion.
+func (s *Server) recordClick(l *db.Link, req *http.Request) {
+	select {
+	case s.clicks <- &db.Click{Link: l, Request: req}:
+	// OK
+	default:
+		log.Printf("could not enqueue click for %q", l.Short)
+	}
+}
+
 func (s *Server) refreshMapper(ctx context.Context) error {
 	tag, err := s.store.ETag(ctx)
 	if err != nil {
@@ -557,12 +575,7 @@ func (s *Server) root(req *http.Request) *response.Response {
 	if !ok || l == nil || (user == "" && !l.Public) {
 		l = &db.Link{URL: s.fallback}
 	} else {
-		// Don't hold up caller for our metrics.
-		go func() {
-			if err := s.store.Click(context.Background(), l.Short); err != nil {
-				log.Printf("dropped click for %s: %v", l.Short, err)
-			}
-		}()
+		s.recordClick(l, req)
 	}
 
 	// Use a 307 here to allow request forwarding.

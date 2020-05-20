@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"testing"
 
@@ -154,8 +155,13 @@ func TestDB(t *testing.T) {
 	t.Run("count clicks", func(t *testing.T) {
 		a := assert.New(t)
 
-		a.NoError(s.Click(ctx, "foobar"))
-		a.NoError(s.Click(ctx, "foobar"))
+		l, err := s.Get(ctx, "foobar")
+		if !a.NoError(err) {
+			return
+		}
+
+		a.NoError(s.Click(ctx, &Click{l, &http.Request{}}))
+		a.NoError(s.Click(ctx, &Click{l, &http.Request{}}))
 		count, err := s.Clicks(ctx, "foobar")
 		a.NoError(err)
 		a.Equal(2, count)

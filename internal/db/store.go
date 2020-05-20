@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS clicks (
   short      STRING      NOT NULL REFERENCES links(short) ON DELETE CASCADE,
   click_time TIMESTAMPTZ NOT NULL DEFAULT now(),
   uuid       UUID        NOT NULL DEFAULT gen_random_uuid(),
+  location   STRING          NULL,
   PRIMARY KEY (short, click_time, uuid)
 ) INTERLEAVE IN PARENT links(short)`,
 	}
@@ -111,8 +112,8 @@ func New(ctx context.Context, conn string) (*Store, error) {
 	s := &Store{db: db}
 
 	if s.click, err = db.PrepareContext(ctx, `
-INSERT INTO clicks (short)
-VALUES ($1)
+INSERT INTO clicks (short, location)
+VALUES ($1, $2)
 `); err != nil {
 		return nil, err
 	}
@@ -202,8 +203,8 @@ SELECT
 }
 
 // Click records a click on a short link.
-func (s *Store) Click(ctx context.Context, short string) error {
-	_, err := tx(ctx, s.click).ExecContext(ctx, normalize(short))
+func (s *Store) Click(ctx context.Context, c *Click) error {
+	_, err := tx(ctx, s.click).ExecContext(ctx, normalize(c.Link.Short), c.Link.URL)
 	return err
 }
 

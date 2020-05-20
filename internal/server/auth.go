@@ -16,11 +16,9 @@ package server
 
 import (
 	"context"
-	"net/http"
-
-	"runtime/pprof"
-
 	"log"
+	"net/http"
+	"runtime/pprof"
 
 	"github.com/cockroachlabs/short/internal/server/response"
 )
