@@ -389,7 +389,7 @@ func (s *Server) public(req *http.Request) *response.Response {
 		s.recordClick(l, req)
 	}
 
-	return response.Redirect(http.StatusTemporaryRedirect, l.URL)
+	return response.Redirect(http.StatusFound, l.URL)
 }
 
 func (s *Server) publish(req *http.Request) *response.Response {
@@ -579,5 +579,5 @@ func (s *Server) root(req *http.Request) *response.Response {
 	}
 
 	// Use a 307 here to allow request forwarding.
-	return response.Redirect(http.StatusTemporaryRedirect, l.URL)
+	return response.Redirect(http.StatusFound, l.URL)
 }
