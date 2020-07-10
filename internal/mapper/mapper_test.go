@@ -38,6 +38,12 @@ func TestMapper(t *testing.T) {
 			Short: "param",
 			URL:   host + "success/$(p)/$(q)/suffix",
 		},
+		{
+			Short: "fallback",
+			URL: host + "success/fallback/$(1)||" +
+				host + "success/fallback/$(q)||" +
+				host + "success/fallback/other",
+		},
 	}
 	m := New()
 	m.SetLinks(links)
@@ -133,6 +139,32 @@ func TestMapper(t *testing.T) {
 		{
 			request: "/param?p=foo&q=bar&extra=ignored",
 			match:   host + "success/foo/bar/suffix",
+		},
+
+		// Test fallback
+		{
+			request: "/fallback/foo",
+			match:   host + "success/fallback/foo",
+		},
+		{
+			request: "/fallback?q=bar",
+			match:   host + "success/fallback/bar",
+		},
+		{
+			request: "/fallback/?q=bar",
+			match:   host + "success/fallback/bar",
+		},
+		{
+			request: "/fallback?x=bar",
+			match:   host + "success/fallback/other",
+		},
+		{
+			request: "/fallback/",
+			match:   host + "success/fallback/other",
+		},
+		{
+			request: "/fallback",
+			match:   host + "success/fallback/other",
 		},
 	}
 

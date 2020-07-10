@@ -72,30 +72,36 @@ func (m *Mapper) Get(request *url.URL) (_ *db.Link, ok bool) {
 		return nil, false
 	}
 
-	ok = true
-	link.URL = subst.ReplaceAllStringFunc(link.URL, func(s string) string {
-		// Throw away delimiters: $(foo) -> foo.
-		s = s[2 : len(s)-1]
+	for _, alt := range strings.Split(link.URL, "||") {
+		ok = true
+		link.URL = subst.ReplaceAllStringFunc(alt, func(s string) string {
+			// Throw away delimiters: $(foo) -> foo.
+			s = s[2 : len(s)-1]
 
-		if s == "" {
+			if s == "" {
+				ok = false
+				return ""
+			}
+
+			if param := request.Query().Get(s); param != "" {
+				return param
+			}
+
+			if idx, err := strconv.Atoi(s); err == nil {
+				if idx >= 0 && idx < len(parts) {
+					return parts[idx]
+				}
+			}
+
 			ok = false
 			return ""
+		})
+		if ok {
+			return &link, true
 		}
+	}
 
-		if param := request.Query().Get(s); param != "" {
-			return param
-		}
-
-		if idx, err := strconv.Atoi(s); err == nil {
-			if idx >= 0 && idx < len(parts) {
-				return parts[idx]
-			}
-		}
-
-		ok = false
-		return ""
-	})
-	return &link, ok
+	return nil, false
 }
 
 // SetLinks updates the internal state of the Mapper with a new
