@@ -21,7 +21,10 @@ import (
 	"runtime/pprof"
 
 	"github.com/cockroachlabs/short/internal/server/response"
+	"google.golang.org/api/idtoken"
 )
+
+const iapHeader = "x-goog-iap-jwt-assertion"
 
 type contextKey int
 
@@ -55,6 +58,23 @@ const (
 	anyHost
 )
 
+// extractEmail looks for the IAP JWT data.
+func extractEmail(r *http.Request) (string, bool) {
+	jwt := r.Header.Get(iapHeader)
+	if jwt == "" {
+		return "", false
+	}
+
+	payload, err := idtoken.Validate(r.Context(), jwt, "")
+	if err != nil {
+		log.Printf("unable to decode JWT token: %v", err)
+		return "", false
+	}
+
+	ret, ok := payload.Claims["email"].(string)
+	return ret, ok
+}
+
 func (s *Server) handler(
 	authLevel authLevel, canon canonicity, fn func(req *http.Request) *response.Response,
 ) http.HandlerFunc {
@@ -84,7 +104,7 @@ func (s *Server) handler(
 			case authPublic:
 				// No-op.
 			case authRequired, authOptional:
-				if auth, ok := s.extractEmail(req); ok {
+				if auth, ok := extractEmail(req); ok {
 					req = req.WithContext(context.WithValue(ctx, authUser, auth))
 				} else if authLevel == authRequired {
 					resp = response.Status(http.StatusUnauthorized)

@@ -23,7 +23,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -33,7 +32,6 @@ import (
 	httpPprof "net/http/pprof"
 	"path"
 	"runtime/pprof"
-	"strings"
 	"sync"
 	"time"
 
@@ -226,38 +224,6 @@ func (s *Server) asset(r *http.Request) *response.Response {
 		})
 	}
 	return response.Status(http.StatusNotFound)
-}
-
-// extractEmail looks for the IAP JWT data.
-func (s *Server) extractEmail(r *http.Request) (string, bool) {
-	if s.forceUser != "" {
-		return s.forceUser, true
-	}
-	jwt := r.Header.Get("x-goog-iap-jwt-assertion")
-	if jwt == "" {
-		return "", false
-	}
-	// Split the JWT at the period tokens.
-	parts := strings.Split(jwt, ".")
-	if len(parts) != 3 {
-		return "", false
-	}
-
-	// Base64 decode the JSON assertion data.
-	data, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return "", false
-	}
-	var token struct {
-		Email string
-	}
-	if err := json.Unmarshal(data, &token); err != nil {
-		return "", false
-	}
-	if token.Email == "" {
-		return "", false
-	}
-	return token.Email, true
 }
 
 func (s *Server) crud(req *http.Request) *response.Response {

@@ -11,8 +11,7 @@ require (
 	github.com/tdewolff/minify v2.3.6+incompatible
 	github.com/tdewolff/parse v2.3.4+incompatible // indirect
 	github.com/tdewolff/test v1.0.6 // indirect
-	golang.org/x/lint v0.0.0-20200130185559-910be7a94367
-	golang.org/x/tools v0.0.0-20200216192241-b320d3a0f5a2 // indirect
-	golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543 // indirect
-	honnef.co/go/tools v0.0.1-2019.2.3
+	golang.org/x/lint v0.0.0-20200302205851-738671d3881b
+	google.golang.org/api v0.30.0
+	honnef.co/go/tools v0.0.1-2020.1.4
 )
