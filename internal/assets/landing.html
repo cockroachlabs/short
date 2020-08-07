@@ -23,7 +23,8 @@
 <img src="/_/asset/wordmark.svg" height="48px"/>
 {{- $stats := .Store.Served .Ctx -}}
 <p>Welcome {{.User}}! This is a link-shortening service running on a Cockroach Cloud
-    DB. {{$stats.Links}} links and {{$stats.Clicks}} clicks served.</p>
+    DB. {{$stats.Links}} links and <a href="/_/v1/clickreport/">{{$stats.Clicks}} clicks</a> served.
+</p>
 <div class="box">
     <p>Create a new link:</p>
     <form action="/_/v1/publish" method="post" class="new">
@@ -94,7 +95,7 @@
                 <a class="short" href="/{{.Short}}">{{.Short}}</a>
             {{- end -}}
             <span class="url" title="{{.URL}}">{{or .Comment .URL}}</span>
-            <span class="count">{{.Count}} Clicks</span>
+            <span class="count"><a href="/_/v1/clickreport/{{.Short}}">{{.Count}} Clicks</a></span>
             <a class="edit" href="/_/edit/{{.Short}}">Edit</a>
         </div>
     {{end}}

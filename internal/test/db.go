@@ -40,7 +40,7 @@ func StartDB(ctx context.Context) (string, <-chan struct{}, error) {
 	log.Printf("socket and cockroach logs in %s", dir)
 	sock := filepath.Join(dir, ".s.PGSQL.13013")
 
-	cmd := exec.CommandContext(ctx, "cockroach", "start",
+	cmd := exec.CommandContext(ctx, "cockroach", "start-single-node",
 		"--http-addr=127.0.0.1:0",
 		"--insecure",
 		"--listen-addr=127.0.0.1:0",

@@ -162,9 +162,32 @@ func TestDB(t *testing.T) {
 
 		a.NoError(s.Click(ctx, &Click{l, &http.Request{}}))
 		a.NoError(s.Click(ctx, &Click{l, &http.Request{}}))
-		count, err := s.Clicks(ctx, "foobar")
+		count, err := s.ClickCount(ctx, "foobar")
 		a.NoError(err)
 		a.Equal(2, count)
+
+		{
+			ch, err := s.ClickReport(ctx, "foobar")
+			if !a.NoError(err) {
+				return
+			}
+			var count2 int
+			for range ch {
+				count2++
+			}
+			a.Equal(count, count2)
+		}
+		{
+			ch, err := s.ClickReportListed(ctx)
+			if !a.NoError(err) {
+				return
+			}
+			var count2 int
+			for range ch {
+				count2++
+			}
+			a.Equal(count, count2)
+		}
 	})
 
 	t.Run("totals", func(t *testing.T) {

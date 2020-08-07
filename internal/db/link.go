@@ -21,12 +21,22 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // A Click is generated whenever we redirect a caller.
 type Click struct {
 	Link    *Link
 	Request *http.Request
+}
+
+// A ClickReport can be downloaded.
+type ClickReport struct {
+	Destination string
+	Short       string
+	Time        time.Time
+	UUID        uuid.UUID
 }
 
 // Link is a shortened link.

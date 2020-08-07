@@ -134,6 +134,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/_/debug/pprof/", s.handler(authRequired, anyHost, s.pprof))
 	mux.HandleFunc("/_/edit/", s.handler(authRequired, canonical, s.edit))
 	mux.HandleFunc("/_/healthz", s.handler(authPublic, anyHost, s.healthz))
+	mux.HandleFunc("/_/v1/clickreport/", s.handler(authRequired, canonical, s.clickReport))
 	mux.HandleFunc("/_/v1/link/", s.handler(authRequired, canonical, s.crud))
 	mux.HandleFunc("/_/v1/publish", s.handler(authRequired, canonical, s.publish))
 	mux.HandleFunc("/p/", s.handler(authPublic, canonical, s.public))
@@ -224,6 +225,41 @@ func (s *Server) asset(r *http.Request) *response.Response {
 		})
 	}
 	return response.Status(http.StatusNotFound)
+}
+
+func (s *Server) clickReport(r *http.Request) *response.Response {
+	if r.Method != http.MethodGet {
+		return response.Status(http.StatusMethodNotAllowed)
+	}
+
+	// Expecting the next element of the path to be a short link id
+	dir, short := path.Split(r.URL.Path)
+	if dir != "/_/v1/clickreport/" {
+		return response.Status(http.StatusNotFound)
+	}
+
+	var report <-chan *db.ClickReport
+	var filename string
+
+	if short == "" {
+		var err error
+		if report, err = s.store.ClickReportListed(r.Context()); err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
+		filename = "clickreport"
+	} else {
+		if link, _ := s.store.Get(r.Context(), short); link == nil {
+			return response.Status(http.StatusNotFound)
+		}
+
+		var err error
+		if report, err = s.store.ClickReport(r.Context(), short); err != nil {
+			return response.Error(http.StatusInternalServerError, err)
+		}
+		filename = short
+	}
+
+	return response.ClickReport(filename, report)
 }
 
 func (s *Server) crud(req *http.Request) *response.Response {

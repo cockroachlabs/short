@@ -16,14 +16,21 @@
 package response
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"net/http"
+	"time"
+
+	"fmt"
+
+	"github.com/cockroachlabs/short/internal/db"
 )
 
 const (
-	applicationJSON = "application/json"
-	contentType     = "Content-Type"
-	location        = "Location"
+	applicationJSON    = "application/json"
+	contentDisposition = "Content-Disposition"
+	contentType        = "Content-Type"
+	location           = "Location"
 )
 
 // A Response represents the content that will populate an HTTP response.
@@ -32,6 +39,36 @@ type Response struct {
 	fn       func(w http.ResponseWriter) error
 	redirect string
 	status   int
+}
+
+// ClickReport generates a tab-separated-value file.
+func ClickReport(filename string, report <-chan *db.ClickReport) *Response {
+	return Func(func(w http.ResponseWriter) error {
+		w.Header().Add(contentType, "text/tab-separated-values; charset=UTF-8")
+		w.Header().Add(contentDisposition, fmt.Sprintf("attachment; filename=%q", filename+".tsv"))
+		w.WriteHeader(http.StatusOK)
+
+		out := csv.NewWriter(w)
+		out.Comma = '\t'
+		out.Write([]string{
+			"link",
+			"time",
+			"uuid",
+			"destination",
+		})
+
+		for r := range report {
+			out.Write([]string{
+				r.Short,
+				r.Time.UTC().Format(time.RFC3339),
+				r.UUID.String(),
+				r.Destination,
+			})
+		}
+
+		out.Flush()
+		return out.Error()
+	})
 }
 
 // Error constructs a JSON-formatted error message.

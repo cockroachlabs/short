@@ -3,6 +3,7 @@ module github.com/cockroachlabs/short
 go 1.14
 
 require (
+	github.com/google/uuid v1.1.1
 	github.com/lib/pq v1.5.2
 	github.com/pkg/errors v0.9.1
 	github.com/spf13/cobra v1.0.0

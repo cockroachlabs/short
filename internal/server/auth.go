@@ -59,7 +59,11 @@ const (
 )
 
 // extractEmail looks for the IAP JWT data.
-func extractEmail(r *http.Request) (string, bool) {
+func (s *Server) extractEmail(r *http.Request) (string, bool) {
+	if s.forceUser != "" {
+		return s.forceUser, true
+	}
+
 	jwt := r.Header.Get(iapHeader)
 	if jwt == "" {
 		return "", false
@@ -104,7 +108,7 @@ func (s *Server) handler(
 			case authPublic:
 				// No-op.
 			case authRequired, authOptional:
-				if auth, ok := extractEmail(req); ok {
+				if auth, ok := s.extractEmail(req); ok {
 					req = req.WithContext(context.WithValue(ctx, authUser, auth))
 				} else if authLevel == authRequired {
 					resp = response.Status(http.StatusUnauthorized)

@@ -18,9 +18,8 @@ package db
 import (
 	"context"
 	"database/sql"
-	"runtime"
-
 	"log"
+	"runtime"
 
 	"github.com/lib/pq"
 	"github.com/pkg/errors"
@@ -83,16 +82,18 @@ const (
 type Store struct {
 	db *sql.DB
 
-	click   *sql.Stmt // Record a click
-	clicks  *sql.Stmt // Get click count for a link
-	delete  *sql.Stmt // Delete a short link
-	get     *sql.Stmt // Get a short link
-	etag    *sql.Stmt // A modification marker for the links table
-	list    *sql.Stmt // List all links for a user
-	listAll *sql.Stmt // List all links, unordered
-	listed  *sql.Stmt // All listed (internally-visible) links
-	publish *sql.Stmt // Insert/update a link
-	served  *sql.Stmt // Global statistics
+	click             *sql.Stmt // Record a click
+	clickCount        *sql.Stmt // Get click count for a link
+	clickReport       *sql.Stmt // Get clicks for a short link
+	clickReportListed *sql.Stmt // Get clicks for all listed short links
+	delete            *sql.Stmt // Delete a short link
+	get               *sql.Stmt // Get a short link
+	etag              *sql.Stmt // A modification marker for the links table
+	list              *sql.Stmt // List all links for a user
+	listAll           *sql.Stmt // List all links, unordered
+	listed            *sql.Stmt // All listed (internally-visible) links
+	publish           *sql.Stmt // Insert/update a link
+	served            *sql.Stmt // Global statistics
 }
 
 // New creates a new Store.
@@ -118,9 +119,24 @@ VALUES ($1, $2)
 		return nil, err
 	}
 
-	if s.clicks, err = db.PrepareContext(ctx, `
+	if s.clickCount, err = db.PrepareContext(ctx, `
 SELECT COUNT(*) from clicks
 WHERE short = $1
+`); err != nil {
+		return nil, err
+	}
+
+	if s.clickReport, err = db.PrepareContext(ctx, `
+SELECT uuid, click_time, location from clicks
+WHERE short = $1
+`); err != nil {
+		return nil, err
+	}
+
+	if s.clickReportListed, err = db.PrepareContext(ctx, `
+SELECT clicks.short, uuid, click_time, location from clicks
+JOIN links ON links.short = clicks.short
+WHERE links.listed
 `); err != nil {
 		return nil, err
 	}
@@ -208,14 +224,84 @@ func (s *Store) Click(ctx context.Context, c *Click) error {
 	return err
 }
 
-// Clicks returns the number of times that the link has been clicked.
-func (s *Store) Clicks(ctx context.Context, short string) (int, error) {
+// ClickCount returns the number of times that the link has been clicked.
+func (s *Store) ClickCount(ctx context.Context, short string) (int, error) {
 	var count int
-	row := tx(ctx, s.clicks).QueryRowContext(ctx, normalize(short))
+	row := tx(ctx, s.clickCount).QueryRowContext(ctx, normalize(short))
 	if err := row.Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
+}
+
+// ClickReport returns the recorded click information for a specific link.
+func (s *Store) ClickReport(ctx context.Context, short string) (<-chan *ClickReport, error) {
+	ret := make(chan *ClickReport, 1)
+
+	go func() {
+		defer close(ret)
+
+		rows, err := tx(ctx, s.clickReport).QueryContext(ctx, short)
+		if err != nil {
+			log.Printf("listing for %s: %v", short, err)
+			return
+		}
+
+		for rows.Next() {
+			r := &ClickReport{
+				Short: short,
+			}
+			if err := rows.Scan(&r.UUID, &r.Time, &r.Destination); err != nil {
+				log.Printf("query failure for %s: %v", short, err)
+				return
+			}
+			select {
+			case ret <- r:
+			case <-ctx.Done():
+				break
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("query failure for %s: %v", short, err)
+		}
+		_ = rows.Close()
+	}()
+
+	return ret, nil
+}
+
+// ClickReportListed returns click information for all listed links.
+func (s *Store) ClickReportListed(ctx context.Context) (<-chan *ClickReport, error) {
+	ret := make(chan *ClickReport, 1)
+
+	go func() {
+		defer close(ret)
+
+		rows, err := tx(ctx, s.clickReportListed).QueryContext(ctx)
+		if err != nil {
+			log.Printf("clickReportListed: %v", err)
+			return
+		}
+
+		for rows.Next() {
+			r := &ClickReport{}
+			if err := rows.Scan(&r.Short, &r.UUID, &r.Time, &r.Destination); err != nil {
+				log.Printf("query failure: %v", err)
+				return
+			}
+			select {
+			case ret <- r:
+			case <-ctx.Done():
+				break
+			}
+		}
+		if err := rows.Err(); err != nil {
+			log.Printf("query failure for %v", err)
+		}
+		_ = rows.Close()
+	}()
+
+	return ret, nil
 }
 
 // Delete removes the given short link if it is owned by author.
