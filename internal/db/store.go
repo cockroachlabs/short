@@ -36,24 +36,26 @@ var (
 
 	schema = []string{`
 CREATE TABLE IF NOT EXISTS links (
-  author     STRING      NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  comment    STRING      NOT NULL DEFAULT '',
-  listed     BOOL        NOT NULL DEFAULT false,
-  pub        BOOL        NOT NULL DEFAULT false,
-  short      STRING      NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  url        STRING      NOT NULL,
-  PRIMARY KEY (short), -- Use INSERT ON CONFLICT for updates
-  INDEX (updated_at DESC, author) -- "Your links" data
+  author STRING NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now():::TIMESTAMPTZ,
+  pub BOOL NOT NULL DEFAULT false,
+  short STRING NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now():::TIMESTAMPTZ,
+  url STRING NOT NULL,
+  listed BOOL NOT NULL DEFAULT false,
+  comment STRING NOT NULL DEFAULT '':::STRING,
+  CONSTRAINT "primary" PRIMARY KEY (short ASC),
+  INDEX links_updated_at_author_idx (updated_at DESC, author ASC),
+  FAMILY "primary" (author, created_at, pub, short, updated_at, url, listed, comment)
 )`, `
 CREATE TABLE IF NOT EXISTS clicks (
-  short      STRING      NOT NULL REFERENCES links(short) ON DELETE CASCADE,
-  click_time TIMESTAMPTZ NOT NULL DEFAULT now(),
-  uuid       UUID        NOT NULL DEFAULT gen_random_uuid(),
-  location   STRING          NULL,
-  PRIMARY KEY (short, click_time, uuid)
-) INTERLEAVE IN PARENT links(short)`,
+  short STRING NOT NULL,
+  click_time TIMESTAMPTZ NOT NULL DEFAULT now():::TIMESTAMPTZ,
+  uuid UUID NOT NULL DEFAULT gen_random_uuid(),
+  location STRING NOT NULL DEFAULT '':::STRING,
+  CONSTRAINT "primary" PRIMARY KEY (short ASC, click_time ASC, uuid ASC),
+  CONSTRAINT fk_short_ref_links FOREIGN KEY (short) REFERENCES links(short) ON DELETE CASCADE,
+  FAMILY "primary" (short, click_time, uuid, location))`,
 	}
 )
 
